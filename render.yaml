@@ -1,0 +1,26 @@
+# Centinela SST · servidor en Render (plan gratuito). Una aplicación de SkyNet Genesis.
+services:
+  - type: web
+    name: centinela-sst-api
+    runtime: node
+    rootDir: servidor
+    plan: free
+    region: ohio
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/ping
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRETO_SESION
+        generateValue: true
+      - key: CLAVE_CRON
+        generateValue: true
+      - key: ORIGENES
+        value: https://centinela.skynetgenesis.com
+      - key: URL_APP
+        value: https://centinela.skynetgenesis.com
+      - key: BREVO_API_KEY
+        sync: false
+      - key: CORREO_REMITENTE
+        sync: false
