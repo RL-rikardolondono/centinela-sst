@@ -562,13 +562,15 @@ const PAGO_URL = 'https://skynetgenesis.com', SOPORTE_WA = '3044375758';
 function estadoSuscripcion(e){
   if (!e) return { k:'na', t:'—', cls:'' };
   if (e.suspendida) return { k:'suspendida', t:'Suspendida', cls:'p-bad', bloquea:true };
-  if (!e.vence) return { k:'pendiente', t:'Pendiente de primer pago', cls:'p-warn', bloquea:true };
-  if (e.vence >= HOY) return { k:'activa', t:'Activa · pagado hasta ' + fmt(e.vence), cls:'p-ok' };
-  const ini = addD(e.vence, 1), dia5 = addD(ini, 4), dia10 = addD(ini, 9);
-  if (HOY >= dia10) return { k:'cerrada', t:'Cerrada por pago', cls:'p-bad', bloquea:true, cierre:dia10 };
+  const ph = pagadoHasta(e);
+  if (ph >= HOY) return { k:'activa', t:'Activa · pagado hasta ' + fmt(ph), cls:'p-ok', hasta:ph };
+  const ini = addD(ph, 1), dia5 = addD(ini, 4), dia10 = addD(ini, 9);
+  if (HOY >= dia10) return { k:'cerrada', t:'Cerrada por pago', cls:'p-bad', bloquea:true, cierre:dia10, hasta:ph };
   if (HOY >= dia5){ const n = diasA(dia10); return { k:'aviso', t:'Aviso: ' + n + (n === 1 ? ' día' : ' días'), cls:'p-bad', dias:n, cierre:dia10 }; }
   return { k:'activa', t:'Activa · pago pendiente desde ' + fmt(ini), cls:'p-amb' };
 }
+/* Sin fecha registrada (empresas creadas antes de esta regla), se toma el fin del mes en que se creó */
+function pagadoHasta(e){ return e.vence || finMesPago(String(e.creado?.en || e.creado || HOY).slice(0, 10)); }
 function avisoPagoHTML(e){
   const st = estadoSuscripcion(e); if (st.k !== 'aviso') return '';
   return `<div class="avisopago" role="alert"><b>Mensualidad pendiente: le ${st.dias === 1 ? 'queda 1 día' : 'quedan ' + st.dias + ' días'}.</b> El ${fmt(st.cierre)} se cerrará el acceso de ${esc(e.razon)} si no se registra el pago. <a class="btn sm" href="${PAGO_URL}" target="_blank" rel="noopener">Pagar con Bold</a> <a class="btn sm wa" href="${waLink(SOPORTE_WA)}" target="_blank" rel="noopener">WhatsApp de soporte 304 437 5758</a></div>`;
@@ -654,7 +656,7 @@ function pantalla(){
   if (!e) return marco('<div class="lock">La empresa de este usuario no existe o fue eliminada. Hable con el administrador de la plataforma.</div>');
   const st = estadoSuscripcion(e);
   if (st.bloquea && u.rol !== 'super') return marco(`<div class="box" style="max-width:640px"><h3>El acceso de ${esc(e.razon)} está cerrado</h3><p class="lead">Estado de la suscripción: <span class="pill ${st.cls}">${esc(st.t)}</span></p>
-    <p>${st.k === 'cerrada' ? `La mensualidad estaba pagada hasta el ${fmt(e.vence)}. Según las condiciones del servicio, desde el día 5 sin pago se muestra un aviso y el día 10 se cierra el acceso hasta que se registre el pago.` : st.k === 'pendiente' ? 'La suscripción se activa al registrar el primer pago mensual.' : 'El servicio fue suspendido por el administrador de la plataforma.'}</p>
+    <p>${st.k === 'cerrada' ? `La mensualidad estaba pagada hasta el ${fmt(st.hasta)}. Según las condiciones del servicio, desde el día 5 sin pago se muestra un aviso y el día 10 se cierra el acceso hasta que se registre el pago.` : st.k === 'pendiente' ? 'La suscripción se activa al registrar el primer pago mensual.' : 'El servicio fue suspendido por el administrador de la plataforma.'}</p>
     <p>Los datos de su empresa se conservan completos. En cuanto se registre el pago, el acceso se restablece de inmediato.</p>
     <div class="acts" style="justify-content:flex-start"><a class="btn pri" href="${PAGO_URL}" target="_blank" rel="noopener">Pagar con Bold</a><a class="btn" style="background:#1F8A4C;color:#fff;border-color:#1F8A4C" href="${waLink(SOPORTE_WA)}" target="_blank" rel="noopener">WhatsApp de soporte 304 437 5758</a></div></div>`);
   const v = MENU[u.rol].includes(UI.vista) ? UI.vista : 'inicio'; UI.vista = v;
@@ -3386,7 +3388,7 @@ function vPlataforma(){
     '<button class="btn" type="button" data-act="ejemplo">Crear empresa de ejemplo</button><button class="btn pri" type="button" data-act="nuevaEmpresa">+ Nueva empresa</button>')}
   <nav class="tabs2" style="max-width:720px;margin:0 0 14px" aria-label="Secciones de la plataforma">${tabs.map(([k, n]) => `<button type="button" data-act="platTab" data-v="${k}" aria-pressed="${t === k}">${n}</button>`).join('')}</nav>
   ${cuerpo}
-  <p class="norma"><b>Reglas del servicio:</b> cada suscripción corresponde a una empresa (un NIT). Pago desde el primer día, sin prueba gratis y sin permanencia. La empresa queda bloqueada hasta registrar el primer pago. Cada pago deja un "Pagado hasta" (fin de mes); si no se paga, desde el día 5 la empresa ve un aviso rojo con cuenta regresiva y el día 10 se cierra el acceso hasta que se registre el pago.</p>`;
+  <p class="norma"><b>Reglas del servicio:</b> cada suscripción corresponde a una empresa (un NIT). Sin permanencia. Toda empresa tiene un "Pagado hasta" (al crearla, el fin del mes en curso); si no se paga, desde el día 5 la empresa ve un aviso rojo con cuenta regresiva y el día 10 se cierra el acceso hasta que se registre el pago.</p>`;
 }
 function dlgPago(cid){
   const e = G.empresas[cid]; const tr = tramoDe(e.trabajadoresActivos || 0);
@@ -3397,7 +3399,7 @@ function dlgPago(cid){
     <label>Meses que cubre<input class="field" id="pg-m" name="meses" type="number" min="1" max="12" value="1" required></label>
     <label>Valor recibido (COP)<input class="field" id="pg-v" name="valor" type="number" min="0" step="1000" value="${tr.precio || 0}"></label>
     <label>Medio y referencia<input class="field" id="pg-r" name="ref" placeholder="Ej.: transferencia Bancolombia 123456"></label>
-    <label class="full">Pagado hasta<input class="field" id="pg-h" name="hasta" type="date" value="${finMesPago(e.vence && e.vence >= HOY ? addD(e.vence, 1) : HOY)}" required></label>
+    <label class="full">Pagado hasta<input class="field" id="pg-h" name="hasta" type="date" value="${finMesPago(pagadoHasta(e) >= HOY ? addD(pagadoHasta(e), 1) : HOY)}" required></label>
     <p class="hint full">Por defecto, el último día del mes que se paga. Al guardar, el acceso se restablece de inmediato. Para solo corregir la fecha sin registrar dinero, deje el valor en 0.</p>
     ${pag.length ? `<div class="full"><div class="eyebrow" style="margin-bottom:4px">Pagos anteriores</div>${pag.slice(0, 8).map(p => `<p class="small" style="margin:0">${fmt(p.fecha)} · ${money(p.valor)} · ${p.meses} ${p.meses == 1 ? 'mes' : 'meses'} ${p.ref ? '· ' + esc(p.ref) : ''}</p>`).join('')}</div>` : ''}
   </div>`);
@@ -3656,9 +3658,9 @@ const FORMS = {
       if (Object.values(G.usuarios).some(u => u.usuario === us)) return errForm(form, 'Ese usuario ya existe. Elija otro.');
       if (!claveValida(cl)) return errForm(form, 'La contraseña temporal debe tener mínimo 8 caracteres, con letras y números.');
       const cid = genId('e');
-      await Data.set('empresas/' + cid, { ...d, trabajadoresActivos:0, pagos:[], vence:null, creado:marca() });
+      await Data.set('empresas/' + cid, { ...d, trabajadoresActivos:0, pagos:[], vence:finMesPago(HOY), creado:marca() });
       const sal = nuevaSal(); await Data.set('usuarios/' + genId('u'), { usuario:us, nombre:val(fd, 'uNombre'), correo:val(fd, 'uCorreo'), rol:'admin', empresa:cid, sal, hash:await hashClave(cl, sal), activo:true, cambiarClave:true, creado:new Date().toISOString() });
-      cerrar(); toast('Empresa creada. Queda pendiente de primer pago.');
+      cerrar(); toast('Empresa creada. Pagado hasta ' + fmt(finMesPago(HOY)) + '.');
       return;
     }
     await Data.set('empresas/' + id, { ...clone(G.empresas[id]), ...d, editado:marca() });
