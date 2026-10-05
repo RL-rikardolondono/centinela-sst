@@ -238,7 +238,7 @@ const server = http.createServer(async (req, res) => {
       if (frenar(k, 5, 60) || frenar('wip:' + ip(req), 30, 60)) return enviar(res, 429, { code:'rate_limited', message:'Demasiados intentos. Espere una hora o pida ayuda al área de SST.' });
       const e = coleccion('empresas').find(x => String(x.nit) === nit);
       if (!e){ fallo(k); fallo('wip:' + ip(req)); return enviar(res, 404, { code:'empresa', message:'No encontramos una empresa con ese NIT.' }); }
-      if (e.vence && e.vence < HOY() && dias(e.vence, HOY()) < -5) return enviar(res, 403, { code:'bloqueada', message:'El servicio de su empresa no está activo en este momento.' });
+      if (e.suspendida || !e.vence || dias(e.vence, HOY()) <= -10) return enviar(res, 403, { code:'bloqueada', message:'El servicio de su empresa no está activo en este momento.' });
       const t = coleccion('e/' + e.id + '/trabajadores').find(x => String(x.documento) === dc && String(x.codigo) === cod && x.estado !== 'retirado');
       if (!t){ fallo(k); fallo('wip:' + ip(req)); return enviar(res, 401, { code:'credenciales', message:'El documento o el código no coinciden. Pida su código al área de SST.' }); }
       return enviar(res, 200, { token:firmar({ t:'w', cid:e.id, tid:t.id }), cid:e.id, tid:t.id });
