@@ -24,3 +24,13 @@ services:
         sync: false
       - key: CORREO_REMITENTE
         sync: false
+      - key: CORREO_DUENO
+        value: contacto@skynetgenesis.com
+      - key: URL_API
+        value: https://centinela-sst-api.onrender.com
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: IA_MODELO
+        value: claude-haiku-5-5
+      - key: IA_TOPE_USD
+        value: "40"
