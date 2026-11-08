@@ -1,6 +1,6 @@
 /* Centinela-IA SST · SkyNet Genesis · contacto@skynetgenesis.com · WhatsApp 304 437 5758
    Permite instalar la aplicación en el celular. Los datos siempre se piden al servidor; solo se guarda la pantalla. */
-const CACHE = 'centinela-ia-v5';
+const CACHE = 'centinela-ia-v7';
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'])).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
