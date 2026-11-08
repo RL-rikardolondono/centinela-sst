@@ -15,16 +15,24 @@ const CORREO_REMITENTE = process.env.CORREO_REMITENTE || '';
 const URL_APP = process.env.URL_APP || 'https://centinela.skynetgenesis.com';
 const URL_API = process.env.URL_API || 'https://centinela-sst-api.onrender.com';
 const CORREO_DUENO = process.env.CORREO_DUENO || 'contacto@skynetgenesis.com';
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || ''; // créditos de API de SkyNet Genesis: nunca se muestra ni se guarda en la base
-const IA_MODELO = process.env.IA_MODELO || 'claude-haiku-5-5';
-const IA_URL = process.env.IA_URL || 'https://api.anthropic.com/v1/messages';
-const IA_TOPE_USD = Number(process.env.IA_TOPE_USD || 40); // tope de gasto mensual de IA de toda la plataforma
-const IA_PRECIO_IN = Number(process.env.IA_PRECIO_IN || 0.10), IA_PRECIO_OUT = Number(process.env.IA_PRECIO_OUT || 0.50); // USD por millón de tokens (revisar cada mes)
-const IA_PLANES = { ia100:[100, 60000], ia300:[300, 150000], ia1000:[1000, 400000] }; // consultas y precio en pesos (pago único con Bold, vigencia 30 días)
+/* (21 oct 2026, decisión de Ricardo) Centinela-IA ya no usa IA: los documentos del SG-SST se venden ya elaborados en el Market.
+   Cada documento es un pago único con Bold (plan centinela:doc-<código> o varios en centinela:paq_doc-a_doc-b). Precios PROPUESTOS, pendientes de su aprobación:
+   deben ser iguales a los de $PLANES en bold-firma.php y a MKT_DOCS del cliente. Las plantillas viven en la base (plantillas/<código>), no en el código público. */
+const MKT_DOCS = { 'POL-01':80000, 'OBJ-01':60000, 'MAN-01':250000, 'MAN-02':120000, 'PLA-01':150000, 'PRG-01':120000, 'PRO-07':120000, 'PRO-01':150000, 'PRO-02':150000, 'PRO-03':120000, 'PRO-04':90000, 'PRO-05':90000, 'PRO-06':120000, 'PRG-06':120000, 'PRG-07':120000, 'PLA-02':220000, 'REG-01':80000, 'PRG-02':180000, 'PRG-03':180000, 'PRG-04':180000, 'PRG-05':150000, 'POL-02':80000, 'POL-03':150000, 'PLA-03':250000 };
+const MKT_TODOS = 1690000; // paquete con los 24 documentos
+const mktClave = cod => 'doc-' + cod.toLowerCase().replace(/[^a-z0-9]/g, ''); // POL-01 -> doc-pol01
+const hay = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const MKT = Object.fromEntries([...Object.entries(MKT_DOCS).map(([c, v]) => [mktClave(c), { precio:v, docs:[c] }]), ['doc-todos', { precio:MKT_TODOS, docs:Object.keys(MKT_DOCS) }]]);
 const BOLD_VERIFICAR = process.env.BOLD_VERIFICAR || 'https://skynetgenesis.com/bold-verificar.php'; // central de pagos de SkyNet Genesis
 const DIAS_PRUEBA = 15;
 const TRAMOS_DEF = [{ hasta:10, precio:89000 }, { hasta:50, precio:159000 }, { hasta:200, precio:289000 }, { hasta:null, precio:490000 }];
 const DB_URL = process.env.DATABASE_URL || '';
+/* (31 oct 2026, directiva SkyNet Genesis) Superadministrador propio de la app y enlaces de contraseña del dueño directo a su Gmail */
+const SUPER_CORREO = 'superadmin.centinela@skynetgenesis.com';
+const DUENO_CORREO = process.env.DUENO_CORREO || 'rikardolondono@gmail.com';
+const DUENO_CUENTAS = new Set([SUPER_CORREO, 'superadmin@skynetgenesis.com', ...String(process.env.DUENO_CUENTAS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)]);
+const CUPO_MB = Number(process.env.CUPO_MB || 100); // espacio para evidencias adjuntas por empresa (MB)
+const SMMLV = Number(process.env.SMMLV || 1750905); // salario mínimo 2026 (Decreto 1469 de 2025)
 if (!process.env.SECRETO_SESION) console.warn('Aviso: falta SECRETO_SESION; las sesiones se cierran al reiniciar.');
 
 /* ---------- almacenamiento: memoria + PostgreSQL (o archivo local para pruebas) ---------- */
@@ -43,6 +51,8 @@ async function iniciarBD(){
     pool.on('error', e => console.error('Conexión de la base cerrada (Neon dormido):', e.message)); // sin esto Node se cae cuando Neon duerme
     await pool.query(`create table if not exists docs (ruta text primary key, coleccion text not null, empresa text, datos jsonb not null, actualizado timestamptz not null default now())`);
     await pool.query(`create index if not exists docs_empresa on docs(empresa)`);
+    await pool.query(`create table if not exists archivos (id text primary key, empresa text, tipo text not null, bytes int not null, datos bytea not null, creado timestamptz not null default now())`);
+    (await pool.query('select empresa, sum(bytes)::bigint b from archivos group by empresa')).rows.forEach(x => USO.set(x.empresa || '', Number(x.b)));
     const r = await pool.query('select ruta, datos from docs');
     r.rows.forEach(x => DOCS.set(x.ruta, { data:x.datos, ts:tic() }));
     console.log('Documentos cargados desde PostgreSQL:', DOCS.size);
@@ -50,6 +60,34 @@ async function iniciarBD(){
     const o = JSON.parse(fs.readFileSync(ARCHIVO, 'utf8')); Object.entries(o).forEach(([k, v]) => DOCS.set(k, { data:v, ts:tic() }));
     console.log('Documentos cargados desde archivo:', DOCS.size);
   } else console.log('Sin base de datos: modo de prueba en memoria.');
+  for (const [ruta, v] of DOCS){ // el Superadministrador entra con su correo propio (superadmin.centinela@); conserva su contraseña
+    const u = v.data; if (!/^usuarios\//.test(ruta) || !u || u.rol !== 'super') continue;
+    if (u.usuario === 'superadmin@skynetgenesis.com' || String(u.correo || '').toLowerCase() === 'superadmin@skynetgenesis.com'){
+      if (coleccion('usuarios').some(x => x.usuario === SUPER_CORREO || String(x.correo || '').toLowerCase() === SUPER_CORREO)) continue;
+      await poner(ruta, { ...u, usuario:u.usuario === 'superadmin@skynetgenesis.com' ? SUPER_CORREO : u.usuario, correo:SUPER_CORREO }); console.log('Superadministrador cambiado a', SUPER_CORREO); }
+  }
+}
+/* ---------- archivos adjuntos (evidencias, documentos de contratistas, manuales): tabla aparte, no van a la memoria ni a la sincronización ---------- */
+const USO = new Map(); const ARCH_MEM = new Map();
+const TIPOS_ARCH = ['image/jpeg','image/png','image/webp','application/pdf'];
+async function guardarArchivo(empresa, tipo, b64, idFijo){
+  if (!TIPOS_ARCH.includes(tipo)) throw { status:400, code:'invalid_argument', message:'Solo se aceptan fotos (JPG, PNG, WEBP) o PDF.' };
+  const buf = Buffer.from(String(b64 || ''), 'base64'); if (!buf.length) throw { status:400, code:'invalid_argument', message:'El archivo está vacío.' };
+  if (!idFijo && buf.length > 2.5e6) throw { status:413, code:'too_large', message:'El archivo pesa más de 2,5 MB. Para PDF, envíe uno más liviano (las fotos se reducen solas).' };
+  if (tipo === 'application/pdf' ? buf.slice(0, 4).toString() !== '%PDF' : !(buf[0] === 0xFF || buf[0] === 0x89 || buf.slice(8, 12).toString() === 'WEBP')) throw { status:400, code:'invalid_argument', message:'El archivo no corresponde a su tipo.' };
+  const k = empresa || ''; const usado = USO.get(k) || 0;
+  if (empresa && usado + buf.length > CUPO_MB * 1048576) throw { status:507, code:'sin_espacio', message:'Su empresa llegó al límite de ' + CUPO_MB + ' MB para adjuntos. Escríbanos por WhatsApp 304 437 5758.' };
+  const id = idFijo || 'f' + crypto.randomBytes(9).toString('hex');
+  if (empresa) USO.set(k, usado + buf.length); // se reserva antes de escribir: dos subidas al tiempo no pasan el límite
+  try {
+  if (pool) await pool.query('insert into archivos (id, empresa, tipo, bytes, datos) values ($1,$2,$3,$4,$5) on conflict (id) do update set tipo = excluded.tipo, bytes = excluded.bytes, datos = excluded.datos', [id, empresa, tipo, buf.length, buf]);
+  else ARCH_MEM.set(id, { empresa, tipo, datos:buf });
+  } catch(e){ if (empresa) USO.set(k, Math.max(0, (USO.get(k) || 0) - buf.length)); throw e; }
+  return { id, bytes:buf.length };
+}
+async function leerArchivo(id){
+  if (pool){ const r = await pool.query('select empresa, tipo, datos from archivos where id = $1', [id]); return r.rows[0] || null; }
+  return ARCH_MEM.get(id) || null;
 }
 const partes = ruta => { const i = ruta.lastIndexOf('/'); return [ruta.slice(0, i), ruta.slice(i + 1)]; };
 const empresaDe = ruta => { const m = /^e\/([^/]+)\//.exec(ruta); return m ? m[1] : null; };
@@ -72,8 +110,8 @@ const avanzarMeses = (iso, n) => { let h = String(iso || '').slice(0, 10) || HOY
 function sumarPagosBold(d, enBase){
   if (!enBase) return d; const tiene = new Set((d.pagos || []).map(x => x.recibo || x.ref));
   const faltan = (enBase.pagos || []).filter(x => x.medio === 'Bold' && !tiene.has(x.recibo || x.ref)); if (!faltan.length) return d;
-  const meses = faltan.filter(x => !x.concepto).reduce((a, x) => a + Number(x.meses ?? 1), 0); // las compras de IA no suman meses
-  return { ...d, pagos:[...(d.pagos || []), ...faltan], vence:meses ? avanzarMeses(d.vence || enBase.vence, meses) : (d.vence || enBase.vence), ia:enBase.ia || d.ia, suspendida:meses ? false : d.suspendida };
+  const meses = faltan.filter(x => !x.concepto).reduce((a, x) => a + Number(x.meses ?? 1), 0); // las compras del Market no suman meses
+  return { ...d, pagos:[...(d.pagos || []), ...faltan], vence:meses ? avanzarMeses(d.vence || enBase.vence, meses) : (d.vence || enBase.vence), ia:enBase.ia || d.ia, modulos:{ ...(d.modulos || {}), ...(enBase.modulos || {}) }, suspendida:meses ? false : d.suspendida };
 }
 /* Las empresas se guardan dentro de una transacción con bloqueo, porque la central de Bold también las modifica en la base */
 async function ponerEmpresa(ruta, data){
@@ -107,7 +145,7 @@ function sesion(req){
   if (p.t === 'u'){ const u = doc('usuarios/' + p.uid); if (!u || u.activo === false) return null;
     if (u.rol === 'asesor'){ const lst = Array.isArray(u.empresas) ? u.empresas : []; const emp = lst.includes(u.empresa) ? u.empresa : null; // el asesor trabaja como administrador de la empresa que eligió
       return { t:'u', uid:p.uid, rol:'admin', asesor:true, asesorDe:lst, empresa:emp, nombre:u.nombre, usuario:u.usuario, cerrada:emp ? empresaCerrada(emp) : false }; }
-    return { t:'u', uid:p.uid, rol:u.rol, empresa:u.empresa, nombre:u.nombre, usuario:u.usuario, cerrada:u.rol !== 'super' && empresaCerrada(u.empresa) }; }
+    return { t:'u', uid:p.uid, rol:u.rol, empresa:u.empresa, nombre:u.nombre, usuario:u.usuario, area:u.rol === 'jefe' ? String(u.area || '').trim().toLowerCase() : undefined, cerrada:u.rol !== 'super' && empresaCerrada(u.empresa) }; }
   if (p.t === 'w'){ const t = doc('e/' + p.cid + '/trabajadores/' + p.tid); if (!t || t.estado === 'retirado' || empresaCerrada(p.cid)) return null; return { t:'w', cid:p.cid, tid:p.tid }; }
   return null;
 }
@@ -119,10 +157,14 @@ const fallo = clave => INTENTOS.set(clave, [...(INTENTOS.get(clave) || []), Date
 
 /* ---------- permisos ---------- */
 const CLIN = new Set(['hc','tamizajes','casos','autoreportes','bateriaInd','paraclinicos']);
-const PORTAL_PROPIOS = new Set(['evaluaciones','tamizajes','cursosRes','epp','reportes','autoreportes','cambios','practicaRes','votos','sociodemo']);
+const PORTAL_PROPIOS = new Set(['evaluaciones','tamizajes','cursosRes','epp','reportes','autoreportes','cambios','practicaRes','votos','sociodemo','tareas','lecturas','reintegros']);
 const PORTAL_TODOS = new Set(['cargos','cursos','capacitaciones','elecciones']);
+/* jefe de área: ve y gestiona solo lo de su área (trabajadores con el mismo campo "área") */
+const JEFE_NO = new Set(['bitacora','quejas','sociodemo','bateria','incapacidades','presupuesto','config','encuestaRes','urna','votos','postulaciones','informes','auditorias']);
+const JEFE_ESCRIBE = new Set(['tareas','reportes','inspecciones','caminatas','visitantes','bitacora','acpm']);
+const enArea = (s, cid, tid) => { const t = tid && doc('e/' + cid + '/trabajadores/' + tid); return !!t && String(t.area || '').trim().toLowerCase() === s.area && !!s.area; };
 /* respuestas correctas de los simulacros por casos (deben coincidir con CASOS_PR del cliente) */
-const CLAVES_CASOS = { b1:[0,1,0,1], b2:[1,0,0], b3:[1,0,1], v1:[1,0,1], v2:[1,1,0], v3:[1,1,1], c1:[1,1,1], c2:[1,0,1], c3:[1,1,0] };
+const CLAVES_CASOS = {b1:[0,1,0,1],b2:[1,0,0],b3:[1,0,1],v1:[1,0,1],v2:[1,1,0],v3:[1,1,1],c1:[1,1,1],c2:[1,0,1],c3:[1,1,0],b4:[1,2,0],b5:[2,2,0],b6:[0,2,0],b7:[2,2,0],b8:[2,0,1],v4:[0,1,1],v5:[2,0,2],v6:[0,0,0,0],v7:[2,2,1],v8:[2,1,0],v9:[1,2,2],c4:[0,1,1],c5:[0,0,2],c6:[1,1,1],c7:[2,2,2],c8:[2,1,1],al1:[2,1,2],al2:[0,0,2],al3:[1,1,2],al4:[1,1,1],ec1:[0,2,1],ec2:[2,0,0],ec3:[1,1,1],el1:[1,2,0],el2:[0,0,2],el3:[0,0,2],q1:[1,2,2],q2:[2,1,0],q3:[2,1,2],q4:[0,1,1],m1:[0,0,1],m2:[1,1,2],m3:[2,0,0],bi1:[1,2,1],bi2:[2,1,0],bi3:[1,1,1],er1:[0,1,2],er2:[1,2,1],er3:[0,0,2],pa1:[0,0,1],pa2:[2,1,1],pa3:[0,2,2],pa4:[2,2,1],pa5:[0,0,0],pa6:[2,0,1],pa7:[2,1,1],ap1:[1,2,1],ap2:[1,1,1],ap3:[1,0,1],co1:[1,0,2],co2:[0,0,2],co3:[2,0,0],cn1:[2,0,2],cn2:[0,2,0],cn3:[1,0,0],ag1:[0,0,1],ag2:[2,1,0],ag3:[1,1,1],ag4:[2,1,0],mi1:[1,1,2],mi2:[0,1,0],mi3:[2,2,0],ca1:[1,1,1],ca2:[0,0,1],ps1:[1,0,0],ps2:[2,1,0],ps3:[1,0,2],ps4:[2,1,2],of1:[0,1,1],of2:[0,0,2],of3:[0,0,2]};
 /* código de asistencia: el secreto de cada capacitación o, en las antiguas, el derivado de su id (mismo cálculo que el cliente) */
 const codCap = id => { let h = 7; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) % 900000; return String(1000 + h % 9000); };
 const codAsis = (id, c) => (c && c.codigoAsis) || codCap(id);
@@ -137,10 +179,13 @@ function puedeLeer(s, ruta, d){
     if (c === 'urna') return false;
     if (c === 'postulaciones') return !!(d && (d.trabajador === s.tid || d.estado === 'aceptada'));
     if (PORTAL_TODOS.has(c)) return true;
+    if (c === 'comunicados') return !!(d && d.publicado && (!d.hasta || d.hasta >= HOY()));
+    if (c === 'tareas') return !!d && d.trabajador === s.tid && !!d.paraTrabajador && !d.anulado; // solo las tareas que el trabajador debe hacer
     if (PORTAL_PROPIOS.has(c)) return d && d.trabajador === s.tid;
     return false;
   }
   if (s.cerrada) return ruta === 'empresas/' + s.empresa || ruta === 'usuarios/' + s.uid || col === 'plataforma';
+  if (col === 'plantillas' || col === 'manuales') return false; // plantillas del Market: solo el servidor las usa
   if (col === 'boldpagos' || col === 'pruebas' || col === 'iauso') return s.rol === 'super';
   if (col === 'usuarios') return s.rol === 'super' || id === s.uid || (d && d.rol !== 'asesor' && d.empresa === s.empresa && !!s.empresa) || (d && d.rol === 'asesor' && s.rol === 'admin' && !s.asesor && (d.empresas || []).includes(s.empresa));
   if (col === 'pagosAviso') return s.rol === 'super' || (s.rol === 'admin' && !!s.empresa && d && d.empresa === s.empresa);
@@ -152,12 +197,21 @@ function puedeLeer(s, ruta, d){
   if (cid !== s.empresa) return false;
   const c = col.split('/')[2];
   if (CLIN.has(c)) return esClin(s.rol);
+  if (s.rol === 'jefe'){
+    if (JEFE_NO.has(c)) return false;
+    if (!s.area) return false; // un jefe sin área no ve datos de personas ni tareas
+    if (c === 'evidencias'){ if (!d || JEFE_NO.has(d.col) || CLIN.has(d.col) || d.col === 'contratistas') return false; const rp = 'e/' + cid + '/' + d.col + '/' + d.ref; const pr = doc(rp); return !!pr && puedeLeer(s, rp, pr); }
+    if (c === 'trabajadores') return enArea(s, cid, id);
+    if (d && d.trabajador) return enArea(s, cid, d.trabajador);
+    if (c === 'tareas') return !!d && String(d.area || '').trim().toLowerCase() === s.area;
+    return true; }
   if (c === 'quejas') return ['admin','psicologo','super'].includes(s.rol);
+  if (c === 'encuestaRes' && d && d.anonima){ const cm = doc('e/' + cid + '/comunicados/' + d.comunicado); return !!cm && !!cm.hasta && cm.hasta < HOY(); } // resultados anónimos: al cerrar
   if (c === 'sociodemo') return ['admin','medico','psicologo'].includes(s.rol);
   if (c === 'urna'){ const el = doc('e/' + cid + '/elecciones/' + id); return !!el && el.estado === 'cerrada'; } // el conteo se ve solo después del escrutinio
   return true;
 }
-const limpiarUsuario = d => { if (!d) return d; const { sal, hash, ...r } = d; return r; };
+const limpiarUsuario = d => { if (!d) return d; const { sal, hash, ...r } = d; return { ...r, claveOk:!!hash }; };
 const iguales = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function sinCampos(o, ks){ const r = { ...(o || {}) }; ks.forEach(k => delete r[k]); return r; }
 
@@ -179,7 +233,7 @@ function revisarEscritura(s, ruta, d, borrar){
     if (c === 'cambios'){ if (d.trabajador !== s.tid) no(); return { descripcion:String(d.descripcion || '').slice(0, 2000), impacto:String(d.impacto || '').slice(0, 2000), tipo:'Novedad reportada por un trabajador', trabajador:s.tid, fecha:HOY(), estado:'propuesto', origen:'Portal del trabajador', en:new Date().toISOString() }; }
     if (c === 'postulaciones'){ const el = doc('e/' + s.cid + '/elecciones/' + d.eleccion); if (d.trabajador !== s.tid || !el || el.estado !== 'inscripcion' || coleccion('e/' + s.cid + '/postulaciones').some(x => x.eleccion === d.eleccion && x.trabajador === s.tid)) no(); return { eleccion:String(d.eleccion), trabajador:s.tid, propuesta:String(d.propuesta || '').slice(0, 400), fecha:HOY(), estado:'pendiente' }; }
     if (c === 'reportes'){ if (d.trabajador && d.trabajador !== s.tid) no(); return d; }
-    if (c === 'tareas'){ if (d.trabajador !== s.tid) no(); return d; }
+    if (c === 'tareas'){ if (d.trabajador !== s.tid) no(); const { responsableU, paraTrabajador, area, ...r } = d; return r; }
     if (c === 'casos'){ if (d.trabajador !== s.tid) no(); return { __caso:true, ...d, nivel:['bajo','medio','alto'].includes(d.nivel) ? d.nivel : 'medio' }; }
     no();
   }
@@ -189,6 +243,7 @@ function revisarEscritura(s, ruta, d, borrar){
     throw { status:403, code:'solo_bold', message:'La mensualidad se paga en línea con Bold.' };
   }
   if (col === 'boldpagos' || col === 'pruebas'){ if (R !== 'super' || !borrar) no(); return null; } // los escribe solo el servidor
+  if (col === 'plantillas') no(); // se cargan con /api/super/plantillas
   if (s.cerrada) throw { status:402, code:'cerrada', message:'El acceso de su empresa está cerrado por pago pendiente.' };
   if (col === 'usuarios'){
     if (borrar){ if (R !== 'super') no(); return null; }
@@ -196,25 +251,29 @@ function revisarEscritura(s, ruta, d, borrar){
     const cor = String(d.correo || '').trim().toLowerCase();
     if (cor && coleccion('usuarios').some(u => u.id !== id && (String(u.correo || '').toLowerCase() === cor || u.usuario === cor))) throw { status:409, code:'correo_existe', message:'Ese correo ya lo usa otra cuenta.' };
     if (String(d.usuario || '').includes('@') && d.usuario !== cor && !(prev && prev.usuario === d.usuario)) throw { status:400, code:'invalid_argument', message:'Si el usuario es un correo, debe ser el mismo correo del usuario.' };
-    const base = { ...d }; if (!base.hash && prev?.hash){ base.sal = prev.sal; base.hash = prev.hash; }
+    const base = { ...d }; delete base.claveOk; if (!base.hash && prev?.hash){ base.sal = prev.sal; base.hash = prev.hash; }
+    if (R !== 'super'){ base.ultimo = prev?.ultimo; base.bloqueo = prev?.bloqueo; }
     if (prev?.rol === 'asesor' || d.rol === 'asesor'){ // las empresas de un asesor solo cambian por invitación del administrador de cada empresa
       if (R === 'super' && !s.asesor) return prev ? { ...base, empresas:prev.empresas || [], empresa:prev.empresa || null } : { ...base, empresas:[], empresa:null };
       if (id === s.uid && prev) return { ...base, rol:prev.rol, empresa:prev.empresa, empresas:prev.empresas || [], activo:prev.activo, usuario:prev.usuario };
       no();
     }
     if (R === 'super') return base;
-    if (R === 'admin' && s.empresa && d.empresa === s.empresa && d.rol !== 'super' && (!prev || (prev.empresa === s.empresa && prev.rol !== 'super'))) return base;
-    if (id === s.uid && prev) return { ...base, rol:prev.rol, empresa:prev.empresa, activo:prev.activo, usuario:prev.usuario };
+    if (d.rol === 'jefe' && !String(d.area || '').trim()) throw { status:400, code:'invalid_argument', message:'Escriba el área del jefe de área.' };
+    if (R === 'admin' && s.empresa && d.empresa === s.empresa && ['admin','medico','psicologo','auxiliar','consulta','jefe'].includes(d.rol) && (!prev || (prev.empresa === s.empresa && prev.rol !== 'super'))) return { ...base, ultimo:prev?.ultimo, bloqueo:prev?.bloqueo, activo:prev?.bloqueo ? false : base.activo }; // una cuenta bloqueada por la plataforma solo la desbloquea el Superadministrador
+    if (id === s.uid && prev) return { ...base, rol:prev.rol, empresa:prev.empresa, activo:prev.activo, usuario:prev.usuario, area:prev.area, ultimo:prev.ultimo, bloqueo:prev.bloqueo };
     no();
   }
   if (col === 'empresas' && !borrar && d.logo && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(String(d.logo))) throw { status:400, code:'invalid_argument', message:'El logo no es una imagen válida.' };
   if (col === 'empresas'){
     if (R === 'super'){ if (borrar) return null;
-      if (prev) return { ...d, trabajadoresActivos:prev.trabajadoresActivos, ia:prev.ia, correcciones:prev.correcciones, vence:prev.vence, pagos:prev.pagos || [], prueba:prev.prueba }; // el súper no regala: fechas y pagos solo con Bold o una corrección con motivo
+      if (prev) return { ...d, trabajadoresActivos:prev.trabajadoresActivos, ia:prev.ia, modulos:prev.modulos, correcciones:prev.correcciones, vence:prev.vence, pagos:prev.pagos || [], prueba:prev.prueba, interna:prev.interna, ipsLlave:prev.ipsLlave, visitasV:prev.visitasV }; // el súper no regala: fechas y pagos solo con Bold o una corrección con motivo
       const hoy = HOY(); const d0 = new Date(hoy + 'T12:00:00Z'); d0.setUTCDate(d0.getUTCDate() + DIAS_PRUEBA - 1); const hp = d0.toISOString().slice(0, 10);
-      return { ...d, trabajadoresActivos:0, pagos:[], vence:hp, prueba:{ desde:hoy, hasta:hp }, ia:undefined, correcciones:undefined }; }
+      return { ...d, trabajadoresActivos:0, pagos:[], vence:hp, prueba:{ desde:hoy, hasta:hp }, ia:undefined, modulos:undefined, correcciones:undefined, interna:undefined, ipsLlave:undefined, visitasV:undefined }; }
     if (borrar || id !== s.empresa || !prev || R === 'consulta') no();
-    return { ...d, pagos:prev.pagos, vence:prev.vence, creado:prev.creado, nit:prev.nit, suspendida:prev.suspendida, trabajadoresActivos:prev.trabajadoresActivos, inicioUso:prev.inicioUso, prueba:prev.prueba, ia:prev.ia, correcciones:prev.correcciones };
+    if (esClin(R)) return { ...prev, resumenVigilancia:d.resumenVigilancia }; // el médico y el psicólogo solo publican el resumen de vigilancia (sin nombres)
+    if (R !== 'admin') no(); // los demás datos de la empresa los cambia solo su administrador
+    return { ...d, pagos:prev.pagos, vence:prev.vence, creado:prev.creado, nit:prev.nit, suspendida:prev.suspendida, trabajadoresActivos:prev.trabajadoresActivos, inicioUso:prev.inicioUso, prueba:prev.prueba, ia:prev.ia, modulos:prev.modulos, correcciones:prev.correcciones, interna:prev.interna, ipsLlave:prev.ipsLlave, visitasV:prev.visitasV };
   }
   if (col === 'plataforma' || col === 'normas'){ if (R !== 'super') no(); return borrar ? null : d; }
   if (col === 'soporte'){
@@ -226,6 +285,47 @@ function revisarEscritura(s, ruta, d, borrar){
   const c = col.split('/')[2];
   if (c === 'bitacora') return borrar ? no() : d;
   if (R === 'consulta') no();
+  if (R === 'jefe'){
+    if (!JEFE_ESCRIBE.has(c) || borrar) no();
+    if (!s.area) no();
+    const ar = x => String(x || '').trim().toLowerCase();
+    if (c === 'tareas'){ const t = prev || d; const okA = ar(t.area) === s.area || enArea(s, cid, t.trabajador); if (!okA || (prev && (d.trabajador || null) !== (prev.trabajador || null)) || (prev && ar(d.area) !== ar(prev.area)) || (d.trabajador && !enArea(s, cid, d.trabajador))) no(); }
+    if (c === 'acpm'){ if (prev && ar(prev.area) !== s.area) no(); d = { ...d, area:prev ? prev.area : s.area }; } // acciones que salen de sus inspecciones y caminatas
+    if (c === 'reportes' && ((prev && prev.trabajador && !enArea(s, cid, prev.trabajador)) || (d.trabajador && !enArea(s, cid, d.trabajador)))) no();
+  }
+  if (['encuestaRes','lecturas'].includes(c)) no(); // las escribe el servidor (/api/encuesta)
+  if (c === 'evidencias'){ // los adjuntos se suben con /api/archivo; aquí solo se anulan con motivo
+    if (borrar || !prev) throw { status:403, code:'forbidden', message:'Los adjuntos no se borran: se anulan con un motivo.' };
+    if (prev.anulado || !d.anulado || R !== 'admin') no();
+    const motivo = String(d.anulado.motivo || '').trim().slice(0, 500); if (motivo.length < 10) throw { status:400, code:'invalid_argument', message:'Escriba el motivo de la anulación (mínimo 10 caracteres).' };
+    return { ...prev, anulado:{ motivo, fecha:HOY(), por:s.nombre || '', en:new Date().toISOString() } };
+  }
+  if (c === 'visitantes' && prev && prev.salida && (borrar || d.salida !== prev.salida)) no();
+  if (c === 'contratistas' && prev && !borrar){ // el enlace y lo que subió el contratista solo los cambia el servidor
+    const docs = { ...(d.docs || {}) }; Object.entries(prev.docs || {}).forEach(([k, x]) => { if (x && x.subido) docs[k] = { ...(docs[k] || {}), subido:x.subido }; });
+    const hasta = String(d.revisadoHasta || prev.revisadoHasta || ''); const porRevisar = Object.values(docs).some(x => x && x.subido && String(x.subido.en || '') > hasta);
+    return { ...d, docs, enlaceV:prev.enlaceV, revisadoHasta:hasta, porRevisar };
+  }
+  if (['accidentes','tareas','reportes'].includes(c)){ // (21 oct 2026) registros del SG-SST se conservan: no se borran; se anulan con motivo
+    if (borrar) throw { status:403, code:'forbidden', message:'Este registro no se elimina: anúlelo con un motivo para que quede la evidencia.' };
+    if (prev?.anulado) throw { status:403, code:'forbidden', message:'El registro está anulado y ya no se modifica.' };
+    if (d.anulado){
+      if (R !== 'admin') throw { status:403, code:'forbidden', message:'Solo el administrador SG-SST anula registros.' };
+      const motivo = String(d.anulado.motivo || '').trim().slice(0, 500); if (motivo.length < 10 || !prev) throw { status:400, code:'invalid_argument', message:'Escriba el motivo de la anulación (mínimo 10 caracteres).' };
+      return { ...prev, anulado:{ motivo, fecha:HOY(), por:s.nombre || '', en:new Date().toISOString() } };
+    }
+    if (prev) return { ...prev, ...d, anulado:undefined }; // una edición no puede vaciar el registro
+  }
+  if (c === 'config'){ // parametrización de la empresa: solo el administrador, con forma validada
+    if (R !== 'admin' || id !== 'param') no(); if (borrar) no();
+    const txt = (x, n) => String(x ?? '').replace(/[<>]/g, '').slice(0, n); const idOk = k => /^[A-Za-z0-9_-]{1,40}$/.test(k);
+    const tipos = (o, campos) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([k]) => idOk(k)).slice(0, 40).map(([k, v]) => [k, campos(v || {})]));
+    return { inspActivas:Array.isArray(d.inspActivas) ? d.inspActivas.filter(k => idOk(String(k))).slice(0, 60) : undefined,
+      insp:tipos(d.insp, v => ({ n:txt(v.n, 120), cada:Math.min(12, Math.max(1, Number(v.cada) || 3)), items:(Array.isArray(v.items) ? v.items : []).map(x => txt(x, 200)).slice(0, 40), inactivo:!!v.inactivo })),
+      pt:tipos(d.pt, v => ({ n:txt(v.n, 120), norma:txt(v.norma, 200), curso:txt(v.curso, 60), checks:(Array.isArray(v.checks) ? v.checks : []).map(x => txt(x, 200)).slice(0, 40), inactivo:!!v.inactivo })),
+      cal:(Array.isArray(d.cal) ? d.cal : []).filter(o => o && idOk(String(o.id))).slice(0, 60).map(o => ({ id:String(o.id), texto:txt(o.texto, 200), quien:txt(o.quien, 100), norma:txt(o.norma, 200), cada:[0,1,2,3,6].includes(Number(o.cada)) ? Number(o.cada) : 0, mes:Math.min(12, Math.max(1, Number(o.mes) || 12)), dia:Math.min(28, Math.max(1, Number(o.dia) || 28)) })),
+      editado:d.editado };
+  }
   if (CLIN.has(c) && !esClin(R) && R !== 'super') no(); // el súper solo escribe (empresa de ejemplo), nunca lee lo clínico
   if (c === 'quejas' && !['admin','psicologo','super'].includes(R)) no();
   if (c === 'sustancias' && d && d.fdsEnlace && !/^https:\/\//i.test(String(d.fdsEnlace))) d = { ...d, fdsEnlace:'' };
@@ -296,68 +396,52 @@ async function verificarBold(q){
   console.log('Bold verificado:', JSON.stringify(o).slice(0, 400));
   return enCola(() => aplicarBold(o));
 }
-/* Créditos de IA: pago único, se suman a los vigentes y todos vencen 30 días después de la última compra */
-async function aplicarCreditosIA(reg, rp, cid, k, [n, precio]){
+/* Market: compra de documentos (pago único, no mueve "Pagado hasta"). El valor debe cubrir la suma de lo pedido; lo ya comprado o lo desconocido queda "para revisar" */
+async function aplicarMarket(reg, rp, cid, claves, forzar){
   const re = 'empresas/' + cid; await refrescarEmpresas(cid); const e0 = doc(re);
-  if (!e0 || reg.valor < precio || !tienePagos(e0)){ await poner(rp, { ...reg, estado:'revisar', motivo:!e0 ? 'La empresa no existe' : reg.valor < precio ? 'El valor no cubre el paquete de IA (' + precio + ')' : 'La empresa aún no ha pagado su primera mensualidad' }); correoA(CORREO_DUENO, 'Centinela-IA SST: compra de IA para revisar', `<p>Pago ${esc(reg.pago_id)} de $${reg.valor.toLocaleString('es-CO')} (${esc(k)}) para revisar en el panel.</p>`); return { ok:true, estado:'revisar' }; }
-  const hoy = HOY(); const vence = (() => { const d = new Date(hoy + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 30); return d.toISOString().slice(0, 10); })();
-  const aplicar = (e, maxRec) => { const ia0 = e.ia && e.ia.vence >= hoy ? Number(e.ia.creditos || 0) : 0; const recibo = 'RC-' + hoy.slice(0, 4) + '-' + String(maxRec + 1).padStart(4, '0');
-    const pago = { fecha:hoy, meses:0, valor:reg.valor, ref:reg.ref || reg.pago_id, medio:'Bold', por:'Pago en línea con Bold', hasta:e.vence || '', recibo, pago_id:reg.pago_id, concepto:'Créditos de IA: ' + n + ' consultas' };
-    return { e2:{ ...e, ia:{ creditos:ia0 + n, vence, compras:Number(e.ia?.compras || 0) + 1, ultima:hoy }, pagos:[...(e.pagos || []), pago] }, pago }; };
+  const total = claves.reduce((a, k) => a + (hay(MKT, k) ? MKT[k].precio : 0), 0);
+  const ya = e0 ? claves.filter(k => e0.modulos?.[k] || (e0.modulos?.['doc-todos'] && k !== 'doc-todos')) : [];
+  const motivo = !e0 ? 'La empresa no existe' : claves.some(k => !hay(MKT, k)) ? 'Pedido con un documento desconocido' : forzar ? '' : reg.valor < total ? 'El valor no cubre el pedido (' + total + ')' : ya.length ? 'Ya tenía comprado: ' + ya.join(', ') : '';
+  if (motivo){ await poner(rp, { ...reg, estado:'revisar', motivo }); correoA(CORREO_DUENO, 'Centinela-IA SST: compra del Market para revisar', `<p>Pago ${esc(reg.pago_id)} de $${reg.valor.toLocaleString('es-CO')} (${esc(reg.plan)}): ${esc(motivo)}. Revíselo en el panel.</p>`); return { ok:true, estado:'revisar' }; }
+  const hoy = HOY(); const nombres = claves.map(k => k === 'doc-todos' ? 'Paquete de los 24 documentos' : MKT[k].docs[0]).join(', ');
+  const aplicar = (e, maxRec) => { const recibo = 'RC-' + hoy.slice(0, 4) + '-' + String(maxRec + 1).padStart(4, '0');
+    const pago = { fecha:hoy, meses:0, valor:reg.valor, ref:reg.ref || reg.pago_id, medio:'Bold', por:'Pago en línea con Bold', hasta:e.vence || '', recibo, pago_id:reg.pago_id, concepto:'Market: ' + nombres };
+    const modulos = { ...(e.modulos || {}) }; claves.forEach(k => { modulos[k] = { fecha:hoy, pago_id:reg.pago_id, recibo }; });
+    return { e2:{ ...e, modulos, pagos:[...(e.pagos || []), pago] }, pago }; };
   let out;
   if (pool){
     const c = await pool.connect();
     try {
       await c.query('begin'); await c.query('select pg_advisory_xact_lock(4242)');
-      if ((await c.query('select 1 from docs where ruta = $1', [rp])).rows.length){ await c.query('rollback'); return { ok:true, estado:'aplicado' }; }
+      if (!forzar && (await c.query('select 1 from docs where ruta = $1', [rp])).rows.length){ await c.query('rollback'); return { ok:true, estado:'aplicado' }; }
       const e = (await c.query('select datos from docs where ruta = $1 for update', [re])).rows[0]?.datos || e0; const pre = 'RC-' + hoy.slice(0, 4) + '-';
       const mx = (await c.query(`select coalesce(max(substring(p->>'recibo' from $1)::int), 0) n from docs d, jsonb_array_elements(coalesce(d.datos->'pagos','[]'::jsonb)) p where d.coleccion = 'empresas' and p->>'recibo' like $2`, ['^' + pre + '([0-9]+)$', pre + '%'])).rows[0].n;
       out = aplicar(e, Number(mx));
       await c.query('update docs set datos = $2, actualizado = now() where ruta = $1', [re, out.e2]);
-      await c.query(`insert into docs (ruta, coleccion, empresa, datos, actualizado) values ($1,'boldpagos',null,$2,now())`, [rp, { ...reg, estado:'aplicado', recibo:out.pago.recibo, creditos:n }]);
+      await c.query(`insert into docs (ruta, coleccion, empresa, datos, actualizado) values ($1,'boldpagos',null,$2,now()) on conflict (ruta) do update set datos = excluded.datos, actualizado = now()`, [rp, { ...reg, meses:0, estado:'aplicado', recibo:out.pago.recibo, modulos:claves }]);
       await c.query('commit');
     } catch(x){ await c.query('rollback').catch(() => {}); throw x; } finally { c.release(); }
-    DOCS.set(re, { data:out.e2, ts:tic() }); DOCS.set(rp, { data:{ ...reg, estado:'aplicado', recibo:out.pago.recibo, creditos:n }, ts:tic() });
+    DOCS.set(re, { data:out.e2, ts:tic() }); DOCS.set(rp, { data:{ ...reg, meses:0, estado:'aplicado', recibo:out.pago.recibo, modulos:claves }, ts:tic() });
   } else {
     const pre = 'RC-' + hoy.slice(0, 4) + '-'; let mx = 0; coleccion('empresas').forEach(e => (e.pagos || []).forEach(x => { if (String(x.recibo || '').startsWith(pre)) mx = Math.max(mx, parseInt(x.recibo.slice(pre.length), 10) || 0); }));
-    out = aplicar(e0, mx); await poner(re, out.e2); await poner(rp, { ...reg, estado:'aplicado', recibo:out.pago.recibo, creditos:n });
+    out = aplicar(e0, mx); await poner(re, out.e2); await poner(rp, { ...reg, meses:0, estado:'aplicado', recibo:out.pago.recibo, modulos:claves });
   }
-  correoA(e0.correo, 'Centinela-IA SST: créditos de IA cargados', `<p>Recibimos el pago de <b>${esc(e0.razon)}</b> por $${reg.valor.toLocaleString('es-CO')} (Bold, recibo ${out.pago.recibo}). Quedaron cargadas <b>${n} consultas</b> del asistente con IA, vigentes hasta el ${vence}.</p>`);
+  correoA(e0.correo, 'Centinela-IA SST: documentos comprados', `<p>Recibimos el pago de <b>${esc(e0.razon)}</b> por $${reg.valor.toLocaleString('es-CO')} (Bold, recibo ${out.pago.recibo}). Ya puede cargar en Centinela-IA SST los documentos comprados (${esc(nombres)}) desde el Market: quedan con los datos de su empresa, listos para revisar y aprobar.</p>`);
   return { ok:true, estado:'aplicado', recibo:out.pago.recibo };
 }
-/* Filtro de tema sin IA: solo llegan a la IA preguntas del SG-SST (o seguimientos cortos de una conversación que ya era del tema) */
-const PALABRAS_SST = /seguridad|salud|trabaj|sst|sg-?sst|riesg|peligr|accident|incident|incapacid|ausent|enfermedad|m[eé]dic|examen|ex[aá]menes|evaluaci|aptitud|restricci|reintegr|copasst|vig[ií]a|comit|convivencia|acoso|brigad|emergenc|simulacr|evacu|extintor|botiqu|epp|protecci[oó]n|casco|guante|arn[eé]s|altura|confinad|caliente|el[eé]ctric|qu[ií]mic|sustanc|fds|ruido|ilumin|ergonom|postur|osteomusc|psicosoc|estr[eé]s|bater[ií]a|tamiz|vigilancia|pesv|vial|veh[ií]cul|conduct|capacit|inducci|curso|norma|decreto|resoluci|ley |ministerio|arl|eps|furat|investigaci|matriz|gtc|est[aá]ndar|indicador|auditor|plan anual|pol[ií]tica|objetiv|presupuest|acci[oó]n (correctiva|preventiva|de mejora)|acpm|inspecci|lista de chequeo|contratist|document|acta|informe|permiso|ats|profesiograma|cargo|empleador|empresa|sanci[oó]n|multa|pausas activas|tarea|pendiente|vence/i;
-function temaSST(msgs){
-  const ult = msgs[msgs.length - 1]?.content || ''; if (PALABRAS_SST.test(ult)) return true;
-  const previa = msgs.slice(0, -1).some(m => m.role === 'assistant'); return previa && ult.length <= 120 && msgs.slice(1, -1).some(m => m.role === 'user' && PALABRAS_SST.test(m.content)); /* el primer mensaje son las reglas del asistente */
-}
-/* Asistente con IA: reserva 1 crédito antes de llamar a Anthropic y lo devuelve si la llamada falla; tope mensual de gasto de la plataforma */
-async function consultarIA(s, b){
-  if (s.t !== 'u' || s.cerrada || !s.empresa) throw { status:403, code:'forbidden', message:'No tiene permiso para usar el asistente.' };
-  if (!ANTHROPIC_KEY) throw { status:503, code:'ia_no_config', message:'El asistente con IA aún no está activo. Escríbanos por WhatsApp 304 437 5758.' };
-  const msgs = (Array.isArray(b.mensajes) ? b.mensajes : []).slice(-12).map(m => ({ role:m.role === 'assistant' ? 'assistant' : 'user', content:String(m.content || '').slice(0, 12000) })).filter(m => m.content);
-  while (msgs.length && msgs[0].role !== 'user') msgs.shift();
-  if (!msgs.length) throw { status:400, code:'invalid_argument', message:'Escriba su pregunta.' };
-  if (!temaSST(msgs)) return { text:'Esa pregunta no parece ser de seguridad y salud en el trabajo. El asistente solo responde temas del SG-SST de su empresa, así que no se descontó ningún crédito. Pregunte, por ejemplo, por accidentes, exámenes médicos, comités, riesgos, capacitaciones o normas.', creditos:null, fueraDeTema:true }; // (directiva 20 oct 2026) filtro propio sin IA ni costo
-  if (msgs.reduce((n, m) => n + m.content.length, 0) > 40000) throw { status:400, code:'prompt_too_large', message:'La consulta es demasiado larga.' };
-  const mes = HOY().slice(0, 7); const uso = doc('iauso/' + mes) || { usd:0, consultas:0 };
-  if (uso.usd >= IA_TOPE_USD) throw { status:429, code:'ia_tope', message:'El asistente alcanzó el límite de uso de este mes. Intente de nuevo el próximo mes o escríbanos por WhatsApp 304 437 5758.' };
-  if (frenar('ia:' + s.empresa, 30, 10)) throw { status:429, code:'rate_limited', message:'Demasiadas consultas seguidas. Espere unos minutos.' }; fallo('ia:' + s.empresa);
-  const re = 'empresas/' + s.empresa;
-  const mover = n => enCola(async () => { await refrescarEmpresas(s.empresa); const e = doc(re); const hoy = HOY(); const disp = e?.ia && e.ia.vence >= hoy ? Number(e.ia.creditos || 0) : 0;
-    if (n < 0 && disp < 1) throw { status:402, code:'sin_creditos', message:'Su empresa no tiene créditos de IA. El administrador SG-SST los puede comprar en el menú Asistente IA.' };
-    await poner(re, { ...e, ia:{ ...(e.ia || {}), creditos:disp + n } }); return disp + n; });
-  const quedan = await mover(-1);
-  let j;
-  try {
-    const r = await fetch(IA_URL, { method:'POST', headers:{ 'x-api-key':ANTHROPIC_KEY, 'anthropic-version':'2023-06-01', 'content-type':'application/json' }, body:JSON.stringify({ model:IA_MODELO, max_tokens:1500, messages:msgs }), signal:AbortSignal.timeout(60000) });
-    j = await r.json().catch(() => null); if (!r.ok || !j) throw new Error('ia ' + r.status + ' ' + JSON.stringify(j || {}).slice(0, 200));
-  } catch(x){ console.error('IA:', x.message); await mover(1).catch(() => {}); throw { status:502, code:'ia_error', message:'El asistente no respondió. No se descontó el crédito. Intente de nuevo.' }; }
-  const text = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-  const usd = ((j.usage?.input_tokens || 0) * IA_PRECIO_IN + (j.usage?.output_tokens || 0) * IA_PRECIO_OUT) / 1e6;
-  await enCola(() => { const u0 = doc('iauso/' + mes) || { usd:0, consultas:0 }; return poner('iauso/' + mes, { usd:Math.round((u0.usd + usd) * 1e6) / 1e6, consultas:(u0.consultas || 0) + 1, actualizado:new Date().toISOString() }); });
-  if (uso.usd + usd >= IA_TOPE_USD * 0.8 && uso.usd < IA_TOPE_USD * 0.8) correoA(CORREO_DUENO, 'Centinela-IA SST: la IA llegó al 80 % del tope del mes', `<p>Gasto de IA de ${mes}: US$${(uso.usd + usd).toFixed(2)} de US$${IA_TOPE_USD}.</p>`);
-  return { text:text || '(Sin respuesta)', creditos:quedan };
+/* Documento del Market lleno con los datos de la empresa (solo si la empresa lo compró) */
+const RIESGO_TXT = { 1:'I (mínimo)', 2:'II (bajo)', 3:'III (medio)', 4:'IV (alto)', 5:'V (máximo)' };
+const MESES_L = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+function documentoMarket(cid, cod){
+  const e = doc('empresas/' + cid) || {}; const pl = doc('plantillas/' + cod); if (!pl) return null;
+  const hoy = HOY(); const n = coleccion('e/' + cid + '/trabajadores').filter(t => t.estado !== 'retirado').length;
+  const cargos = coleccion('e/' + cid + '/cargos').map(c => c.nombre).filter(Boolean);
+  const pel = [...new Set(coleccion('e/' + cid + '/peligros').map(p => (p.clasif || '') + ': ' + (p.descripcion || '')))].slice(0, 10);
+  const falta = '(por completar)'; const v = x => String(x ?? '').trim() || falta;
+  const D = { razon:v(e.razon), nit:e.nit ? e.nit + (e.dv !== undefined && e.dv !== '' ? '-' + e.dv : '') : falta, ciudad:v(e.ciudad), direccion:v(e.direccion), actividad:v(e.actividad), riesgo:RIESGO_TXT[e.riesgo] || v(e.riesgo), arl:v(e.arl), representante:v(e.representante), responsable:v(e.responsable),
+    trabajadores:String(n || e.trabajadoresActivos || 0), anio:hoy.slice(0, 4), fecha:Number(hoy.slice(8, 10)) + ' de ' + MESES_L[Number(hoy.slice(5, 7)) - 1] + ' de ' + hoy.slice(0, 4), organo:n >= 10 ? 'COPASST' : 'Vigía de SST',
+    cargos:cargos.length ? cargos.join(', ') : falta, peligros:pel.length ? pel.join('; ') : falta };
+  return { codigo:cod, nombre:pl.nombre, tipo:pl.tipo, texto:String(pl.texto || '').replace(/\{\{(\w+)\}\}/g, (m, k) => hay(D, k) ? D[k] : m) };
 }
 /* Valor en pesos: acepta 89000, "89000", "89.000", "89,000" o "$ 89.000 COP" */
 function numeroCOP(v){ if (typeof v === 'number') return v; let t = String(v).replace(/[^\d.,]/g, '');
@@ -372,8 +456,9 @@ async function aplicarBold(o){
   const rp = 'boldpagos/' + pid; if (doc(rp)) return { ok:true, estado:doc(rp).estado };
   const reg = { pago_id:pid, ref, plan, empresa:cid, meses, valor, en:new Date().toISOString() };
   if (plan === 'centinela:prueba'){ await poner(rp, { ...reg, estado:'prueba' }); return { ok:true, estado:'prueba' }; }
-  const pIA = IA_PLANES[plan.slice(10)];
-  if (pIA) return aplicarCreditosIA(reg, rp, cid, plan.slice(10), pIA);
+  const mk = /^centinela:(doc-[a-z0-9]+|paq_[a-z0-9_-]+)$/.exec(plan);
+  if (mk){ const claves = mk[1].startsWith('paq_') ? mk[1].slice(4).split('_').filter(Boolean) : [mk[1]]; if (claves.every(k => /^doc-/.test(k))) return aplicarMarket(reg, rp, cid, [...new Set(claves)]);
+    await poner(rp, { ...reg, estado:'revisar', motivo:'Paquete que mezcla documentos con otros conceptos' }); return { ok:true, estado:'revisar' }; }
   const re = 'empresas/' + cid; await refrescarEmpresas(cid); const e0 = doc(re);
   if (!e0){ await poner(rp, { ...reg, estado:'revisar', motivo:'La empresa no existe' }); correoA(CORREO_DUENO, 'Centinela-IA SST: pago de Bold para revisar', `<p>Pago ${esc(pid)} de $${valor.toLocaleString('es-CO')} sin empresa (${esc(cid)}). Revíselo en el panel.</p>`); return { ok:true, estado:'revisar' }; }
   const precio = precioPlan(Number(e0.trabajadoresActivos || 0)); const m = Math.min(meses, precio ? Math.floor(valor / precio + 1e-9) : meses);
@@ -447,6 +532,21 @@ async function correo(para, asunto, cuerpo){
   return r.ok;
 }
 
+/* solo cambia la fecha del último ingreso: no pisa un cambio de contraseña o un bloqueo que llegue al mismo tiempo */
+async function marcarIngreso(uid){
+  const ruta = 'usuarios/' + uid; const ahora = new Date().toISOString();
+  if (pool){ const r = await pool.query(`update docs set datos = jsonb_set(datos, '{ultimo}', to_jsonb($2::text)) where ruta = $1 returning datos`, [ruta, ahora]); if (r.rows[0]) DOCS.set(ruta, { data:r.rows[0].datos, ts:tic() }); return; }
+  const cur = doc(ruta); if (cur) await poner(ruta, { ...cur, ultimo:ahora });
+}
+/* Los enlaces de contraseña de las cuentas del dueño (Superadministrador y las de sus empresas) van directo a su Gmail (directiva 29 oct 2026) */
+const esDelDueno = us => us && (us.rol === 'super' || DUENO_CUENTAS.has(String(us.usuario || '').toLowerCase()) || DUENO_CUENTAS.has(String(us.correo || '').toLowerCase()));
+const destinoClave = us => esDelDueno(us) ? DUENO_CORREO : (us && us.correo) || '';
+async function enviarEnlaceClave(us, para){
+  const t = firmar({ t:'r', uid:us.id, h:huellaClave(us) }, 60 * 60e3); const e = us.empresa ? doc('empresas/' + us.empresa) : null;
+  const cuenta = para === DUENO_CORREO ? `<p style="background:#E8F1FA;padding:8px 10px;border-radius:6px">Cuenta: <b>${esc(us.usuario)}</b> · ${esc(us.rol === 'super' ? 'Superadministrador de Centinela-IA SST' : (e?.razon || ''))}</p>` : '';
+  return correo(para, 'Centinela-IA SST: cree o cambie su contraseña', `<p>Hola, ${esc(us.nombre)}.</p>${cuenta}<p>Use este enlace para crear o cambiar la contraseña del usuario <b>${esc(us.usuario)}</b>. Sirve durante 1 hora y una sola vez.</p><p><a href="${URL_APP}/#recuperar=${t}" style="background:#0B4F8A;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Crear o cambiar mi contraseña</a></p><p>Si usted no la pidió, ignore este correo; su contraseña sigue igual.</p>`).catch(() => false);
+}
+
 /* ---------- utilidades http ---------- */
 function cors(req, res){
   const o = req.headers.origin; const ok = ORIGENES.includes('*') ? '*' : (o && ORIGENES.includes(o) ? o : ORIGENES[0]);
@@ -454,7 +554,7 @@ function cors(req, res){
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
 }
 const enviar = (res, status, obj) => { res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-const leerCuerpo = req => new Promise((ok, no) => { let b = ''; req.on('data', c => { b += c; if (b.length > 8e6){ no({ status:413, code:'too_large', message:'Archivo demasiado grande.' }); req.destroy(); } }); req.on('end', () => { try { ok(b ? JSON.parse(b) : {}); } catch(e){ no({ status:400, code:'invalid_argument', message:'Datos no válidos.' }); } }); });
+const leerCuerpo = (req, max) => new Promise((ok, no) => { let b = ''; req.on('data', c => { b += c; if (b.length > (max || 8e6)){ no({ status:413, code:'too_large', message:'Archivo demasiado grande.' }); req.destroy(); } }); req.on('end', () => { try { ok(b ? JSON.parse(b) : {}); } catch(e){ no({ status:400, code:'invalid_argument', message:'Datos no válidos.' }); } }); });
 const ip = req => { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(t => t.trim()).filter(Boolean); return x.length ? x[x.length - 1] : (req.socket.remoteAddress || ''); }; // la última la pone el proxy de Render; las primeras las puede inventar el cliente
 
 /* ---------- correo diario (Brevo) ---------- */
@@ -464,9 +564,9 @@ const dias = (iso, hoy) => Math.round((new Date(iso + 'T12:00:00') - new Date(ho
 /* Regla de cobro de SkyNet Genesis (oct 2026): "Pagado hasta" fin de mes; si no se paga, el acceso se cierra el día 5
    del mes siguiente (sin cuenta regresiva). Prueba gratis de 15 días: se cierra al terminar si no se paga. Lo aplica el servidor. */
 const pagadoHasta = e => e.vence || finMes(String(e.creado?.en || e.creado || HOY()).slice(0, 10));
-const tienePagos = e => (e.pagos || []).some(x => Number(x.valor || 0) > 0);
-const enPrueba = e => !!(e && e.prueba?.hasta && !e.prueba.cerrada && !tienePagos(e)); // una cortesía o un "Pagado hasta" del Superadministrador cierra la prueba
-const cerrada = e => !e || !!e.suspendida || (enPrueba(e) ? dias(e.prueba.hasta, HOY()) < 0 : dias(pagadoHasta(e), HOY()) <= -5);
+const tienePagos = e => (e.pagos || []).some(x => Number(x.valor || 0) > 0 && !x.concepto); // las compras del Market (con concepto) no son mensualidad
+const enPrueba = e => !!(e && !e.interna && e.prueba?.hasta && !e.prueba.cerrada && !tienePagos(e)); // una cortesía o un "Pagado hasta" del Superadministrador cierra la prueba
+const cerrada = e => !e || !!e.suspendida || (e.interna ? false : enPrueba(e) ? dias(e.prueba.hasta, HOY()) < 0 : dias(pagadoHasta(e), HOY()) <= -5);
 function precioPlan(n){ const tr = doc('plataforma/config')?.tramos; const lista = Array.isArray(tr) && tr.some(t => Number(t.precio) > 0) ? tr : TRAMOS_DEF; const t = lista.find(x => x.hasta == null || n <= Number(x.hasta)) || lista[lista.length - 1]; return Number(t.precio) || 0; }
 /* "Pagado hasta" después de pagar m meses (regla general de SkyNet Genesis, oct 2026):
    - PRIMER pago: "resto del mes gratis": cubre lo que queda del mes del primer día pagado más el mes siguiente; si ese día
@@ -482,7 +582,7 @@ function hastaTrasPago(e, m){
 }
 const empresaCerrada = cid => cerrada(doc('empresas/' + cid));
 function pendientesEmpresa(cid, hoy){
-  const L = c => coleccion('e/' + cid + '/' + c); const out = [];
+  const L = c => coleccion('e/' + cid + '/' + c).filter(x => !x.anulado); const out = [];
   const add = (f, t) => { if (f && dias(f, hoy) <= 7) out.push([f, t]); };
   L('tareas').filter(t => t.estado !== 'cumplida').forEach(t => add(t.vence, 'Tarea: ' + t.texto + (t.responsable ? ' (' + t.responsable + ')' : '')));
   L('acpm').filter(a => a.estado !== 'cerrada').forEach(a => add(a.vence, 'Acción ' + (a.codigo || '') + ': ' + a.accion));
@@ -491,6 +591,7 @@ function pendientesEmpresa(cid, hoy){
   L('contratistas').filter(c => !c.fin || c.fin >= hoy).forEach(c => add(c.docs?.arl?.vence, 'ARL del contratista ' + c.nombre));
   L('documentos').filter(d => d.estado === 'aprobado').forEach(d => add(d.revision, 'Revisión del documento ' + d.codigo));
   L('accidentes').filter(a => a.tipo !== 'Incidente' && !a.reporteARL).forEach(a => out.push([a.fecha, 'Accidente sin reporte a la ARL (FURAT)']));
+  L('mediciones').forEach(m => add(m.repetir, 'Repetir la medición de ' + String(m.tipo || '').toLowerCase() + ' en ' + (m.area || '')));
   return out.sort((a, b) => a[0].localeCompare(b[0]));
 }
 async function correoDiario(){
@@ -501,6 +602,12 @@ async function correoDiario(){
       if (n >= 0) for (const a of ads) correoA(a.correo, n === 0 ? 'Centinela-IA SST: hoy termina su prueba gratis' : `Centinela-IA SST: le quedan ${n} días de prueba gratis`, `<p>Hola, ${esc(a.nombre)}.</p><p>${n === 0 ? 'Hoy es el último día' : `Le quedan <b>${n} días</b>`} de la prueba gratis de <b>${esc(e.razon)}</b>. Para seguir usando Centinela-IA SST sin interrupciones, pague la mensualidad en línea desde la app (tarjeta débito o crédito, PSE, Nequi, llave Bre-B).</p><p><a href="${URL_APP}" style="background:#14A38B;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Abrir Centinela-IA SST</a></p>`);
     }
     if (cerrada(e)){ res.push({ empresa:e.razon, pendientes:0, enviado:false, cerrada:true }); continue; }
+    /* (31 oct 2026) aviso a cada responsable: sus tareas vencidas o que vencen en 3 días */
+    for (const us of coleccion('usuarios').filter(x => x.empresa === e.id && x.activo !== false && x.correo && x.correoOk && x.avisos !== false)){
+      const mias = coleccion('e/' + e.id + '/tareas').filter(t => !t.anulado && t.estado !== 'cumplida' && t.responsableU === us.id && t.vence && dias(t.vence, hoy) <= 3);
+      if (!mias.length || frenar('av:' + us.id + ':' + hoy, 1, 1440)) continue; fallo('av:' + us.id + ':' + hoy);
+      correo(us.correo, `Centinela-IA SST: tiene ${mias.length} ${mias.length === 1 ? 'tarea pendiente' : 'tareas pendientes'}`, `<p>Hola, ${esc(us.nombre)}.</p><p>Estas tareas de <b>${esc(e.razon)}</b> están a su cargo:</p><ul>${mias.slice(0, 30).map(t => `<li style="margin:4px 0"><b style="color:${dias(t.vence, hoy) < 0 ? '#B93A27' : '#946A00'}">${t.vence}</b> · ${esc(t.texto)}</li>`).join('')}</ul><p><a href="${URL_APP}" style="background:#0B4F8A;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Abrir Centinela-IA SST</a></p><p style="font-size:12px;color:#5D6B78">Puede apagar estos avisos en Mi cuenta.</p>`).catch(() => {});
+    }
     if (!e.resumenDiario){ res.push({ empresa:e.razon, enviado:false, opcional:true }); continue; } // el resumen por correo es opcional (los avisos están en la campana de la app)
     const p = pendientesEmpresa(e.id, hoy); if (!p.length || !e.correo) { res.push({ empresa:e.razon, pendientes:p.length, enviado:false }); continue; }
     const venc = p.filter(x => dias(x[0], hoy) < 0).length;
@@ -522,7 +629,7 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x'); const p = u.pathname;
   try {
     if (p === '/' || p === '/api/ping') return enviar(res, 200, { ok:true, app:'Centinela-IA SST', hora:new Date().toISOString() });
-    if (p === '/api/estado') return enviar(res, 200, { hayUsuarios:coleccion('usuarios').length > 0, epoch:EPOCH });
+    if (p === '/api/estado') return enviar(res, 200, { hayUsuarios:coleccion('usuarios').length > 0, epoch:EPOCH, smmlv:SMMLV, cupoMB:CUPO_MB });
     if (p === '/api/setup' && req.method === 'POST'){
       if (coleccion('usuarios').length) return enviar(res, 409, { code:'ya_configurado', message:'La plataforma ya tiene administrador.' });
       const b = await leerCuerpo(req); if (!b.usuario || !b.sal || !b.hash || !b.nombre) return enviar(res, 400, { code:'invalid_argument' });
@@ -540,7 +647,8 @@ const server = http.createServer(async (req, res) => {
       fallo(k); fallo(kg); fallo('lip:' + ip(req)); // se anota antes de verificar: intentos simultáneos también cuentan
       if (!u2 || hashClave(b.clave || '', u2.sal) !== u2.hash) return enviar(res, 401, { code:'credenciales', message:'Usuario o contraseña incorrectos.' });
       INTENTOS.delete(k); INTENTOS.delete(kg);
-      if (u2.activo === false) return enviar(res, 403, { code:'inactivo', message:'Este usuario está desactivado. Hable con el administrador de su empresa.' });
+      if (u2.activo === false) return enviar(res, 403, { code:'inactivo', message:u2.bloqueo ? 'Este usuario está bloqueado por la plataforma. Escríbanos por WhatsApp 304 437 5758.' : 'Este usuario está desactivado. Hable con el administrador de su empresa.' });
+      if (!u2.ultimo || Date.now() - Date.parse(u2.ultimo) > 3600e3) marcarIngreso(u2.id).catch(() => {}); // último ingreso («Cuentas y accesos»)
       return enviar(res, 200, { token:firmar({ t:'u', uid:u2.id }), uid:u2.id });
     }
     if (p === '/api/portal/login' && req.method === 'POST'){
@@ -588,10 +696,8 @@ const server = http.createServer(async (req, res) => {
       fallo('r:' + ip(req));
       if (!BREVO_KEY || !CORREO_REMITENTE) return enviar(res, 200, { ok:true, sinCorreo:true });
       const us = q && coleccion('usuarios').find(x => x.activo !== false && (x.usuario === q || String(x.correo || '').toLowerCase() === q));
-      if (us && us.correo && !frenar('ru:' + us.id, 3, 60)){
-        fallo('ru:' + us.id);
-        const t = firmar({ t:'r', uid:us.id, h:huellaClave(us) }, 60 * 60e3);
-        correo(us.correo, 'Centinela-IA SST: cambie su contraseña', `<p>Hola, ${esc(us.nombre)}.</p><p>Recibimos una solicitud para cambiar la contraseña del usuario <b>${esc(us.usuario)}</b>. El enlace sirve durante 1 hora y una sola vez.</p><p><a href="${URL_APP}/#recuperar=${t}" style="background:#0B4F8A;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Cambiar mi contraseña</a></p><p>Si usted no la pidió, ignore este correo; su contraseña sigue igual.</p>`).catch(() => {});
+      if (us && destinoClave(us) && !frenar('ru:' + us.id, 3, 60)){
+        fallo('ru:' + us.id); enviarEnlaceClave(us, destinoClave(us)).catch(() => {});
       }
       return enviar(res, 200, { ok:true });
     }
@@ -601,6 +707,64 @@ const server = http.createServer(async (req, res) => {
       const n = String(b.nueva || ''); if (!claveFuerte(n)) return enviar(res, 400, { code:'clave_debil', message:MSG_CLAVE });
       const sal = crypto.randomBytes(12).toString('hex'); await poner('usuarios/' + t.uid, { ...us, sal, hash:hashClave(n, sal), cambiarClave:false });
       return enviar(res, 200, { ok:true, usuario:us.usuario });
+    }
+    /* ---------- (31 oct 2026) rutas públicas con enlace firmado: portal del contratista, registro de visitantes y conexión con la IPS ---------- */
+    if (p === '/api/contratista/info' && req.method === 'GET'){
+      const k = leerToken(u.searchParams.get('t')); const c = k && k.t === 'k' && doc('e/' + k.cid + '/contratistas/' + k.kid); const e = k && doc('empresas/' + k.cid);
+      if (!c || !e || Number(c.enlaceV || 0) !== Number(k.v || 0) || c.anulado || cerrada(e)) return enviar(res, 404, { code:'enlace', message:'El enlace no es válido o ya no está activo. Pídale uno nuevo a la empresa.' });
+      const docs = Object.fromEntries(Object.entries(c.docs || {}).map(([d, x]) => [d, { vence:x.vence || '', mes:x.mes || '', fecha:x.fecha || '', aplica:!!x.aplica, subido:x.subido ? { fecha:x.subido.fecha, nombre:x.subido.nombre, vence:x.subido.vence || '' } : null }]));
+      return enviar(res, 200, { empresa:e.razon, logo:e.logo || '', contratista:c.nombre, servicio:c.servicio || '', docs });
+    }
+    if (p === '/api/contratista/subir' && req.method === 'POST'){
+      if (frenar('ks:' + ip(req), 30, 60)) return enviar(res, 429, { code:'rate_limited', message:'Demasiados envíos. Espere una hora.' }); fallo('ks:' + ip(req));
+      const b = await leerCuerpo(req); const k = leerToken(b.t); const ruta = k && k.t === 'k' ? 'e/' + k.cid + '/contratistas/' + k.kid : '';
+      const tipoDoc = String(b.doc || ''); const VALIDOS = ['arl','pila','sgsst','alturas','poliza','examenes','otro'];
+      const out = await enCola(async () => {
+        const c = ruta && doc(ruta); const e = k && doc('empresas/' + k.cid);
+        if (!c || !e || Number(c.enlaceV || 0) !== Number(k.v || 0) || c.anulado || cerrada(e)) return { status:404, body:{ code:'enlace', message:'El enlace no es válido o ya no está activo.' } };
+        if (!VALIDOS.includes(tipoDoc)) return { status:400, body:{ code:'invalid_argument', message:'Tipo de documento no válido.' } };
+        if (frenar('kc:' + k.cid + ':' + k.kid, 25, 24 * 60)) return { status:429, body:{ code:'rate_limited', message:'Llegó al límite de documentos por hoy. Intente mañana o comuníquese con la empresa.' } }; fallo('kc:' + k.cid + ':' + k.kid);
+        const a = await guardarArchivo(k.cid, String(b.tipo || ''), b.datos);
+        const vence = /^\d{4}-\d{2}-\d{2}$/.test(String(b.vence || '')) ? b.vence : '';
+        const subido = { archivo:a.id, nombre:String(b.nombre || 'documento').replace(/[<>]/g, '').slice(0, 120), tipo:String(b.tipo), bytes:a.bytes, fecha:HOY(), en:new Date().toISOString(), vence, porContratista:true };
+        const d0 = c.docs?.[tipoDoc] || {};
+        await poner(ruta, { ...c, docs:{ ...(c.docs || {}), [tipoDoc]:{ ...d0, subido } }, porRevisar:true });
+        await poner('e/' + k.cid + '/evidencias/' + a.id, { col:'contratistas', ref:k.kid, nombre:subido.nombre, tipo:subido.tipo, bytes:a.bytes, fecha:HOY(), por:'Contratista: ' + c.nombre, etiqueta:tipoDoc, archivo:a.id, std:'2.10.1' });
+        return { status:200, body:{ ok:true } };
+      });
+      return enviar(res, out.status, out.body);
+    }
+    if (p === '/api/visita/info' && req.method === 'GET'){
+      const k = leerToken(u.searchParams.get('t')); const e = k && k.t === 'q' && doc('empresas/' + k.cid);
+      if (!e || Number(e.visitasV || 0) !== Number(k.v || 0) || cerrada(e)) return enviar(res, 404, { code:'enlace', message:'Este código ya no está activo. Pregunte en la portería.' });
+      return enviar(res, 200, { empresa:e.razon, logo:e.logo || '', induccion:String(e.induccionVisita || '').slice(0, 3000), emergencia:e.telefono || '' });
+    }
+    if (p === '/api/visita' && req.method === 'POST'){
+      if (frenar('vi:' + ip(req), 20, 60)) return enviar(res, 429, { code:'rate_limited', message:'Demasiados registros desde esta conexión.' }); fallo('vi:' + ip(req));
+      const b = await leerCuerpo(req); const k = leerToken(b.t); const e = k && k.t === 'q' && doc('empresas/' + k.cid);
+      if (!e || Number(e.visitasV || 0) !== Number(k.v || 0) || cerrada(e)) return enviar(res, 404, { code:'enlace', message:'Este código ya no está activo.' });
+      const t = (x, n) => String(x ?? '').replace(/[<>]/g, '').trim().slice(0, n);
+      const v = { nombre:t(b.nombre, 100), documento:t(b.documento, 20).replace(/[^\dA-Za-z]/g, ''), empresaV:t(b.empresaV, 100), motivo:t(b.motivo, 200), visita:t(b.visita, 100), celular:t(b.celular, 20).replace(/[^\d+]/g, ''), eps:t(b.eps, 60), arl:t(b.arl, 60), contactoEmerg:t(b.contactoEmerg, 120), induccion:b.induccion === true, fecha:HOY(), entrada:new Date().toISOString(), medio:'QR' };
+      if (v.nombre.length < 3 || v.documento.length < 4 || !v.induccion) return enviar(res, 400, { code:'invalid_argument', message:'Escriba su nombre y documento, y confirme que leyó la inducción.' });
+      const id = 'v' + crypto.randomBytes(6).toString('hex'); await poner('e/' + k.cid + '/visitantes/' + id, v); return enviar(res, 200, { ok:true, id });
+    }
+    if (p === '/api/ips/concepto' && req.method === 'POST'){ // Clínica-IA (u otra IPS) envía el concepto de aptitud: llave de la empresa, sin datos clínicos
+      if (frenar('ip:' + ip(req), 300, 60)) return enviar(res, 429, { code:'rate_limited' }); fallo('ip:' + ip(req));
+      const b = await leerCuerpo(req); const llave = String(req.headers['x-llave'] || b.llave || ''); const nit = String(b.nit || '').replace(/\D/g, '');
+      const e = coleccion('empresas').find(x => String(x.nit) === nit);
+      const h = crypto.createHash('sha256').update(llave).digest('hex');
+      if (!e || !e.ipsLlave?.hash || llave.length < 20 || !crypto.timingSafeEqual(Buffer.from(h), Buffer.from(e.ipsLlave.hash))) return enviar(res, 401, { code:'llave', message:'NIT o llave no válidos.' });
+      const CONC = ['Apto','Apto con recomendaciones','Apto con restricciones','Aplazado','No apto'];
+      if (cerrada(e)) return enviar(res, 403, { code:'cerrada', message:'La empresa no tiene el servicio activo.' });
+      const docT = String(b.documento || '').replace(/[\s.]/g, '').toUpperCase(); const t = coleccion('e/' + e.id + '/trabajadores').find(x => x.estado !== 'retirado' && String(x.documento).replace(/[\s.]/g, '').toUpperCase() === docT);
+      if (!t) return enviar(res, 404, { code:'trabajador', message:'No hay un trabajador con ese documento en la empresa.' });
+      if (!CONC.includes(b.concepto) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b.fecha || ''))) return enviar(res, 400, { code:'invalid_argument', message:'Concepto o fecha no válidos. Conceptos: ' + CONC.join(', ') });
+      const tx = (x, n) => String(x ?? '').replace(/[<>]/g, '').slice(0, n);
+      const ref = tx(b.referencia, 60).replace(/[^A-Za-z0-9_-]/g, '');
+      const id = 'ips' + (ref || crypto.randomBytes(6).toString('hex'));
+      await poner('e/' + e.id + '/evaluaciones/' + id, { trabajador:t.id, fecha:b.fecha, tipo:tx(b.tipo, 60) || 'Periódica programada', concepto:b.concepto, recomendaciones:tx(b.recomendaciones, 2000), restricciones:tx(b.restricciones, 2000), vigencia:/^\d{4}-\d{2}-\d{2}$/.test(String(b.vigencia || '')) ? b.vigencia : '', ips:tx(b.ips, 100) || 'IPS conectada', origenIPS:{ en:new Date().toISOString(), ref } });
+      const e2 = doc('empresas/' + e.id); if (e2?.ipsLlave?.hash === h) await poner('empresas/' + e.id, { ...e2, ipsLlave:{ ...e2.ipsLlave, ultimo:new Date().toISOString() } }); // si la desconectaron mientras tanto, no se revive
+      return enviar(res, 200, { ok:true, id });
     }
     let s = sesion(req); if (!s) return enviar(res, 401, { code:'sesion', message:'Inicie sesión de nuevo.' });
     if (p === '/api/pago' && req.method === 'POST'){ // el súper registra un pago (manual o confirmando un aviso de llave) en una sola operación
@@ -644,7 +808,35 @@ const server = http.createServer(async (req, res) => {
       }
       return enviar(res, 200, { ok:true, pago:out.pago, empresa:out.e2 });
     }
-    if (p === '/api/ia' && req.method === 'POST') return enviar(res, 200, await consultarIA(s, await leerCuerpo(req)));
+    if (p === '/api/market/doc' && req.method === 'POST'){ // documento comprado, lleno con los datos de la empresa
+      if (s.t !== 'u' || s.cerrada || s.rol !== 'admin' || !s.empresa) return enviar(res, 403, { code:'forbidden', message:'Solo el administrador SG-SST carga los documentos comprados.' });
+      const b = await leerCuerpo(req); const cod = String(b.codigo || ''); const e = doc('empresas/' + s.empresa) || {};
+      if (!hay(MKT_DOCS, cod)) return enviar(res, 404, { code:'not_found', message:'Ese documento no está en el Market.' });
+      if (!e.modulos?.[mktClave(cod)] && !e.modulos?.['doc-todos']) return enviar(res, 402, { code:'sin_compra', message:'Su empresa aún no ha comprado este documento.' });
+      const d = documentoMarket(s.empresa, cod); if (!d) return enviar(res, 503, { code:'sin_plantilla', message:'El documento se está preparando. Escríbanos por WhatsApp 304 437 5758 y se lo activamos de inmediato.' });
+      return enviar(res, 200, d);
+    }
+    if (p === '/api/super/plantillas' && req.method === 'POST'){ // el Superadministrador carga las plantillas del Market (archivo que entrega SkyNet Genesis)
+      if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const pl = b && typeof b.plantillas === 'object' ? b.plantillas : null; if (!pl) return enviar(res, 400, { code:'invalid_argument', message:'El archivo no tiene plantillas.' });
+      let n = 0; for (const [cod, d] of Object.entries(pl)){ if (!hay(MKT_DOCS, cod) || !d || typeof d.texto !== 'string') continue; await poner('plantillas/' + cod, { nombre:String(d.nombre || cod).slice(0, 200), tipo:String(d.tipo || '').slice(0, 40), texto:d.texto.slice(0, 400000), version:String(b.version || ''), cargado:new Date().toISOString() }); n++; }
+      return enviar(res, 200, { ok:true, cargadas:n, faltan:Object.keys(MKT_DOCS).filter(c => !doc('plantillas/' + c)) });
+    }
+    if (p === '/api/conteo/tamizajes' && req.method === 'GET'){ // la empresa ve cuántos tamizajes hay, quién los aplicó y cuándo, sin nombres ni resultados
+      if (s.t !== 'u' || !s.empresa || s.cerrada) return enviar(res, 403, { code:'forbidden' });
+      const y = HOY().slice(0, 4); const t = coleccion('e/' + s.empresa + '/tamizajes'); const ty = t.filter(x => String(x.fecha || '').startsWith(y));
+      return enviar(res, 200, { anio:y, total:ty.length, portal:ty.filter(x => !x.aplicadoPor).length, profesional:ty.filter(x => x.aplicadoPor).length, ultima:t.map(x => x.fecha).filter(Boolean).sort().pop() || null, todos:t.length });
+    }
+    if (p === '/api/super/aplicar-market' && req.method === 'POST'){ // el súper entrega a mano una compra del Market que quedó "para revisar" (con motivo)
+      if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const rp = 'boldpagos/' + String(b.pago || '').replace(/[^A-Za-z0-9_-]/g, ''); const reg = doc(rp); const motivo = String(b.motivo || '').replace(/[<>]/g, '').trim().slice(0, 300);
+      if (!reg || reg.estado !== 'revisar') return enviar(res, 409, { code:'estado', message:'Ese pago no está para revisar.' });
+      if (motivo.length < 5) return enviar(res, 400, { code:'invalid_argument', message:'Escriba el motivo.' });
+      const mk = /^centinela:(doc-[a-z0-9]+|paq_[a-z0-9_-]+)$/.exec(reg.plan || ''); const claves = mk ? (mk[1].startsWith('paq_') ? mk[1].slice(4).split('_').filter(Boolean) : [mk[1]]) : [];
+      if (!claves.length || !claves.every(k => hay(MKT, k))) return enviar(res, 400, { code:'invalid_argument', message:'Ese pago no es una compra de documentos del Market.' });
+      const r = await enCola(() => aplicarMarket({ ...reg, motivoSuper:motivo, porSuper:s.nombre }, rp, reg.empresa, [...new Set(claves)], true)); return enviar(res, 200, r);
+    }
+    if (p === '/api/super/plantillas' && req.method === 'GET'){ if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' }); return enviar(res, 200, { cargadas:Object.keys(MKT_DOCS).filter(c => doc('plantillas/' + c)), total:Object.keys(MKT_DOCS).length }); }
     if (p === '/api/votar' && req.method === 'POST'){ // voto secreto: se guarda que el trabajador votó y, por separado, el voto sin su nombre
       if (s.t !== 'w') return enviar(res, 403, { code:'forbidden', message:'Solo los trabajadores votan, desde su portal.' });
       const b = await leerCuerpo(req); const eid = String(b.eleccion || '').replace(/[^A-Za-z0-9_-]/g, ''); const cand = String(b.candidato || '');
@@ -731,6 +923,92 @@ const server = http.createServer(async (req, res) => {
       const secciones = Array.isArray(b.secciones) && b.secciones.length === (prev.secciones || []).length ? b.secciones.map((x, i) => [String(prev.secciones[i][0]), String(x[1] ?? '')]) : prev.secciones;
       const firma = { nombre:us.nombre, cargo:String(b.cargo || '').slice(0, 80), licencia:us.licencia || '', en:new Date().toISOString(), usuario:us.usuario };
       await poner(ruta, { ...prev, secciones, firma }); return enviar(res, 200, { ok:true, firma });
+    }
+    /* ---------- (31 oct 2026) adjuntos, enlaces, encuestas, cuentas y manuales ---------- */
+    if (p === '/api/archivo' && req.method === 'POST'){ // evidencia adjunta (foto reducida o PDF liviano) a un registro de la empresa
+      if (s.t !== 'u' || s.cerrada || !s.empresa || !['admin','medico','auxiliar','psicologo','jefe'].includes(s.rol)) return enviar(res, 403, { code:'forbidden', message:'Su perfil no adjunta evidencias.' });
+      if (frenar('ar:' + s.uid, 120, 60)) return enviar(res, 429, { code:'rate_limited', message:'Demasiados archivos en una hora.' }); fallo('ar:' + s.uid);
+      const b = await leerCuerpo(req); const col = String(b.col || '').replace(/[^A-Za-z]/g, ''); const ref = String(b.ref || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+      if (!col || CLIN.has(col) || ['quejas','sociodemo','usuarios'].includes(col)) return enviar(res, 400, { code:'invalid_argument', message:'Ese registro no admite adjuntos.' });
+      if (s.rol === 'jefe' && !JEFE_ESCRIBE.has(col)) return enviar(res, 403, { code:'forbidden' });
+      const a = await guardarArchivo(s.empresa, String(b.tipo || ''), b.datos);
+      const m = { col, ref, nombre:String(b.nombre || 'evidencia').replace(/[<>]/g, '').slice(0, 120), tipo:String(b.tipo), bytes:a.bytes, fecha:HOY(), por:s.nombre, etiqueta:String(b.etiqueta || '').replace(/[<>]/g, '').slice(0, 60), std:/^\d+(\.\d+){1,2}$/.test(String(b.std || '')) ? String(b.std) : '', archivo:a.id, en:new Date().toISOString() };
+      await poner('e/' + s.empresa + '/evidencias/' + a.id, m); return enviar(res, 200, { ok:true, id:a.id, usado:USO.get(s.empresa) || 0, cupo:CUPO_MB * 1048576 });
+    }
+    if (p === '/api/archivo' && req.method === 'GET'){
+      const id = String(u.searchParams.get('id') || '').replace(/[^A-Za-z0-9_-]/g, '');
+      if (s.t !== 'u' || s.cerrada || !s.empresa) return enviar(res, 403, { code:'forbidden' });
+      const m = doc('e/' + s.empresa + '/evidencias/' + id); if (!m || !puedeLeer(s, 'e/' + s.empresa + '/evidencias/' + id, m)) return enviar(res, 404, { code:'not_found', message:'El archivo no existe.' });
+      if (s.rol === 'jefe' && m.col === 'contratistas') return enviar(res, 403, { code:'forbidden' });
+      const a = await leerArchivo(id); if (!a || a.empresa !== s.empresa) return enviar(res, 404, { code:'not_found' });
+      return enviar(res, 200, { tipo:a.tipo, nombre:m.nombre, datos:Buffer.from(a.datos).toString('base64') });
+    }
+    if (p === '/api/espacio' && req.method === 'GET'){ if (s.t !== 'u' || !s.empresa) return enviar(res, 403, { code:'forbidden' }); return enviar(res, 200, { usado:USO.get(s.empresa) || 0, cupo:CUPO_MB * 1048576 }); }
+    if (p === '/api/contratista/enlace' && req.method === 'POST'){ // enlace para que el contratista suba su PILA, ARL y certificados
+      if (s.t !== 'u' || s.cerrada || !s.empresa || !['admin','auxiliar'].includes(s.rol)) return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const kid = String(b.contratista || '').replace(/[^A-Za-z0-9_-]/g, ''); const ruta = 'e/' + s.empresa + '/contratistas/' + kid; const c = doc(ruta);
+      if (!c) return enviar(res, 404, { code:'not_found' });
+      const v = b.nuevo || !c.enlaceV ? Number(c.enlaceV || 0) + 1 : Number(c.enlaceV); if (v !== Number(c.enlaceV || 0)) await poner(ruta, { ...c, enlaceV:v });
+      return enviar(res, 200, { ok:true, url:URL_APP + '/#contratista=' + firmar({ t:'k', cid:s.empresa, kid, v }, 120 * 864e5), dias:120 });
+    }
+    if (p === '/api/visita/enlace' && req.method === 'POST'){
+      if (s.t !== 'u' || s.cerrada || !s.empresa || !['admin','auxiliar'].includes(s.rol)) return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const e = doc('empresas/' + s.empresa); let v = Number(e.visitasV || 0);
+      if (b.nuevo || !v){ v++; await poner('empresas/' + s.empresa, { ...e, visitasV:v }); }
+      return enviar(res, 200, { ok:true, url:URL_APP + '/#visita=' + firmar({ t:'q', cid:s.empresa, v }, 3 * 365 * 864e5) });
+    }
+    if (p === '/api/ips/llave' && req.method === 'POST'){ // llave para que la IPS (Clínica-IA) envíe los conceptos de aptitud; se ve una sola vez
+      if (s.t !== 'u' || s.cerrada || s.rol !== 'admin' || !s.empresa) return enviar(res, 403, { code:'forbidden', message:'Solo el administrador SG-SST genera la llave.' });
+      const b = await leerCuerpo(req); const e = doc('empresas/' + s.empresa);
+      if (b.quitar){ await poner('empresas/' + s.empresa, { ...e, ipsLlave:undefined }); return enviar(res, 200, { ok:true }); }
+      const llave = 'cen_' + crypto.randomBytes(24).toString('base64url');
+      await poner('empresas/' + s.empresa, { ...e, ipsLlave:{ hash:crypto.createHash('sha256').update(llave).digest('hex'), creada:new Date().toISOString(), por:s.nombre, ips:String(b.ips || '').replace(/[<>]/g, '').slice(0, 100) } });
+      return enviar(res, 200, { ok:true, llave, url:URL_API + '/api/ips/concepto', nit:e.nit });
+    }
+    if (p === '/api/encuesta' && req.method === 'POST'){ // el trabajador confirma la lectura de un comunicado o responde una encuesta (una vez)
+      if (s.t !== 'w') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const cid2 = String(b.comunicado || '').replace(/[^A-Za-z0-9_-]/g, '');
+      const out = await enCola(async () => {
+        const c = doc('e/' + s.cid + '/comunicados/' + cid2); if (!c || !c.publicado || (c.hasta && c.hasta < HOY()) || (c.fecha && c.fecha > HOY())) return { status:404, body:{ code:'not_found', message:'El comunicado no está vigente.' } };
+        const rl = 'e/' + s.cid + '/lecturas/' + cid2 + '_' + s.tid; if (doc(rl)?.respondio || (doc(rl) && c.tipo !== 'encuesta')) return { status:200, body:{ ok:true, ya:true } };
+        if (c.tipo === 'encuesta'){
+          const pr = Array.isArray(c.preguntas) ? c.preguntas : []; const rs = Array.isArray(b.respuestas) ? b.respuestas.map(Number) : [];
+          if (rs.length !== pr.length || rs.some((x, i) => !Number.isInteger(x) || x < 0 || x >= (pr[i].op || []).length)) return { status:400, body:{ code:'invalid_argument', message:'Responda todas las preguntas.' } };
+          if (c.anonima){ // anónima: solo un conteo por opción (sin un registro por persona); se ve al cerrar la encuesta
+            const rt = 'e/' + s.cid + '/encuestaRes/' + cid2 + '_total'; const t0 = doc(rt) || { comunicado:cid2, anonima:true, conteo:pr.map(q => (q.op || []).map(() => 0)), total:0 };
+            await poner(rt, { ...t0, conteo:t0.conteo.map((fila, i) => fila.map((n, k) => n + (rs[i] === k ? 1 : 0))), total:t0.total + 1 });
+          } else await poner('e/' + s.cid + '/encuestaRes/' + cid2 + '_' + s.tid, { comunicado:cid2, respuestas:rs, fecha:HOY(), trabajador:s.tid });
+        }
+        await poner(rl, { comunicado:cid2, trabajador:s.tid, respondio:c.tipo === 'encuesta' });
+        return { status:200, body:{ ok:true } };
+      });
+      return enviar(res, out.status, out.body);
+    }
+    if (p === '/api/manual' && req.method === 'GET'){ // cada usuario abre solo el manual de su perfil (más el general)
+      const MAN = { super:['general','superadmin','admin','medico','psicologo','auxiliar','consulta','jefe','trabajador','asesor'], admin:['general','admin'], medico:['general','medico'], psicologo:['general','psicologo'], auxiliar:['general','auxiliar'], consulta:['general','consulta'], jefe:['general','jefe'] };
+      const permitidos = s.t === 'w' ? ['trabajador'] : (s.asesor ? ['general','asesor','admin'] : MAN[s.rol] || []); const cual = String(u.searchParams.get('m') || permitidos[permitidos.length - 1] || '');
+      if (!permitidos.includes(cual)) return enviar(res, 403, { code:'forbidden', message:'Ese manual no corresponde a su perfil.' });
+      const a = await leerArchivo('manual-' + cual); if (!a) return enviar(res, 404, { code:'not_found', message:'El manual se está actualizando. Escríbanos por WhatsApp 304 437 5758.' });
+      res.writeHead(200, { 'Content-Type':'application/pdf', 'Content-Disposition':'inline; filename="Manual-Centinela-IA-' + cual + '.pdf"' }); return res.end(Buffer.from(a.datos));
+    }
+    if (p === '/api/super/manuales' && req.method === 'POST'){
+      if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req, 30e6); let n = 0; for (const [k, v] of Object.entries(b.manuales || {})){ if (!/^[a-z]{3,20}$/.test(k)) continue; await guardarArchivo(null, 'application/pdf', v, 'manual-' + k); n++; }
+      await poner('plataforma/manuales', { cargados:Object.keys(b.manuales || {}).filter(k => /^[a-z]{3,20}$/.test(k)), version:String(b.version || '').slice(0, 40), en:new Date().toISOString() });
+      return enviar(res, 200, { ok:true, cargados:n });
+    }
+    if (p === '/api/super/interna' && req.method === 'POST'){ // empresas propias del dueño: activas sin prueba ni cobros (con motivo)
+      if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const re = 'empresas/' + String(b.empresa || '').replace(/[^A-Za-z0-9_-]/g, ''); const e = doc(re); const motivo = String(b.motivo || '').replace(/[<>]/g, '').trim().slice(0, 300);
+      if (!e) return enviar(res, 404, { code:'not_found' }); if (motivo.length < 5) return enviar(res, 400, { code:'invalid_argument', message:'Escriba el motivo.' });
+      const correcciones = [...(e.correcciones || []), { fecha:HOY(), por:s.nombre, motivo:(b.interna ? 'Empresa interna: ' : 'Deja de ser interna: ') + motivo, antes:e.vence || '', hasta:e.vence || '' }].slice(-50);
+      await poner(re, { ...e, interna:b.interna ? { motivo, por:s.nombre, fecha:HOY() } : undefined, suspendida:b.interna ? false : e.suspendida, correcciones }); return enviar(res, 200, { ok:true });
+    }
+    if (p === '/api/super/enlace' && req.method === 'POST'){ // «Cuentas y accesos»: enviar el enlace para crear o cambiar la contraseña
+      if (s.t !== 'u' || s.rol !== 'super') return enviar(res, 403, { code:'forbidden' });
+      const b = await leerCuerpo(req); const us = doc('usuarios/' + String(b.uid || '')); if (!us) return enviar(res, 404, { code:'not_found' });
+      const para = destinoClave(us); if (!para) return enviar(res, 400, { code:'sin_correo', message:'Ese usuario no tiene correo.' });
+      const ok = await enviarEnlaceClave({ ...us, id:String(b.uid) }, para); return enviar(res, 200, { ok:!!ok, para:para === DUENO_CORREO ? 'el Gmail del dueño' : para });
     }
     if (p === '/api/sync'){
       const since = Number(u.searchParams.get('since') || 0); const mismo = u.searchParams.get('epoch') === EPOCH; const desde = mismo ? since : 0;
