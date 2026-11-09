@@ -285,6 +285,27 @@ label.chk{display:flex;gap:8px;align-items:flex-start;font-weight:500}label.chk 
 .stat.click{cursor:pointer}.stat.click:hover{outline:2px solid #0B4F8A33}
 .num-lnk{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
 .menu-in.grp button .ic{margin-right:6px}
+.cuerpo{display:flex;align-items:flex-start;max-width:1480px;margin:0 auto}
+.cuerpo>main{flex:1;min-width:0;max-width:none;margin:0}
+.lat{flex:0 0 250px;width:250px;position:sticky;top:76px;max-height:calc(100vh - 76px);overflow-y:auto;padding:14px 10px 90px 14px;scrollbar-width:thin}
+.lat-cab,.hamb,.lat-fondo{display:none}
+.lg{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--gc);border-radius:10px;margin:0 0 10px;padding:6px 6px 8px;box-shadow:0 1px 3px rgba(11,79,138,.05)}
+.lgt{display:flex;align-items:center;gap:8px;font-family:var(--f-title,inherit);font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--gc);padding:4px 6px 6px}
+.lgi{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;background:color-mix(in srgb,var(--gc) 14%,#fff);font-size:15px}
+.lg button{display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;background:none;border:0;border-radius:7px;padding:7px 10px 7px 12px;margin:1px 0;font:inherit;font-size:14px;color:var(--ink);cursor:pointer}
+.lg button:hover{background:color-mix(in srgb,var(--gc) 9%,#fff)}
+.lg button[aria-current="page"]{background:var(--gc);color:#fff;font-weight:700}
+.lg button .ct{font-size:11px;background:var(--bad-bg);color:var(--bad);padding:1px 7px;border-radius:9px}
+.lg button[aria-current="page"] .ct{background:#fff}
+.hamb{background:var(--surface-2,#E8F1FA);border:1px solid var(--line);border-radius:9px;font-size:20px;line-height:1;padding:7px 11px;cursor:pointer;color:var(--navy)}
+@media (max-width:900px){
+  .hamb{display:inline-block}
+  .lat{position:fixed;top:0;left:0;bottom:0;max-height:none;width:290px;z-index:60;background:var(--bg);transform:translateX(-105%);transition:transform .2s;padding-top:10px;box-shadow:4px 0 22px rgba(0,0,0,.18)}
+  .lat-cab{display:flex;justify-content:space-between;align-items:center;padding:4px 6px 12px;font-size:16px;color:var(--navy)}
+  .lat-x{background:none;border:0;font-size:20px;cursor:pointer;color:var(--muted)}
+  body.menu-abierto .lat{transform:none}
+  body.menu-abierto .lat-fondo{display:block;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:55}
+}
 .avisopago.prueba{background:var(--navy)}.avisopago.prueba .btn{color:var(--navy)}
 .avisopago{background:#B93A27;color:#fff;font-size:14px;text-align:center;padding:10px 14px;line-height:1.6}.avisopago .btn{margin-left:6px;background:#fff;color:#B93A27;border-color:#fff}.avisopago .btn.wa{background:var(--wa);color:#fff;border-color:#1F8A4C}
 .modo{background:var(--info-bg);color:var(--info);font-size:12.5px;font-weight:600;text-align:center;padding:5px 12px}
@@ -772,11 +793,11 @@ function marco(contenido, plataforma){
     const btn = k => `<button type="button" data-nav="${k}" ${UI.vista === k ? 'aria-current="page"' : ''}>${VISTAS[k]}${k === 'tareas' && venc ? `<span class="ct">${venc}</span>` : ''}</button>`;
     const gs = GRUPOS.map(([n, ks]) => [n, ks.filter(k => mine.includes(k))]).filter(([, ks]) => ks.length);
     const g = gs.find(([, ks]) => ks.includes(UI.vista)) || gs[0];
-    nav = `<nav class="menu" aria-label="Secciones"><div class="menu-in grp">${gs.map(([n, ks]) => `<button type="button" data-nav="${ks.includes(UI.vista) ? UI.vista : ks[0]}" ${g[0] === n ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ICO_GRUPO[n] || '•'}</span>${n}${n === 'Gestión' && venc ? `<span class="ct">${venc}</span>` : ''}</button>`).join('')}</div>
-    <div class="menu-in sub">${g[1].map(btn).join('')}</div></nav>`;
+    const COLG = { 'Resumen':'#0B4F8A', 'Personas':'#1867B0', 'Salud':'#14A38B', 'Riesgos':'#C2410C', 'Operación':'#B45309', 'Gestión':'#0E8571', 'Participación':'#6D28D9', 'Documentos y normas':'#475569', 'Empresa':'#0B4F8A', 'Market':'#1F8A4C' };
+    nav = `<aside class="lat" id="lat" aria-label="Secciones"><div class="lat-cab"><b>Menú</b><button class="lat-x" type="button" data-act="menuCerrar" aria-label="Cerrar el menú">✕</button></div>${gs.map(([n, ks]) => `<div class="lg${g[0] === n ? ' on' : ''}" style="--gc:${COLG[n] || '#0B4F8A'}"><div class="lgt"><span class="lgi" aria-hidden="true">${ICO_GRUPO[n] || '•'}</span>${n}</div>${ks.map(btn).join('')}</div>`).join('')}</aside><div class="lat-fondo" data-act="menuCerrar"></div>`;
   }
   return `${modoBanner()}${e ? avisoPagoHTML(e) : ''}<header class="top"><div class="top-in">
-    <div class="brand">${TORRE}<b>Centinela-IA SST</b></div>
+    ${nav ? '<button class="hamb" type="button" data-act="menuAbrir" aria-label="Abrir el menú">☰</button>' : ''}<div class="brand">${TORRE}<b>Centinela-IA SST</b></div>
     ${e ? `<div class="co">${e.logo ? `<img src="${e.logo}" alt="Logo de ${esc(e.razon)}">` : ''}<div class="nm">${esc(e.razon)}<small>NIT ${esc(e.nit)}-${esc(e.dv)}</small></div></div>` : ''}
     <div class="sp"></div>
     ${e ? (() => { let n = 0; try { n = alertas().filter(a => diasA(a.vence) <= 7).length; } catch(_){} return `<button class="campana" type="button" data-act="campana" aria-label="Pendientes: ${n}" title="Pendientes">🔔${n ? `<span class="ct">${n > 99 ? '99+' : n}</span>` : ''}</button>`; })() : ''}
@@ -786,7 +807,7 @@ function marco(contenido, plataforma){
     <button class="lnk" type="button" data-act="manual" title="Manual del usuario de su perfil">📘 Manual</button>
     <button class="lnk" type="button" data-act="miCuenta">Mi cuenta</button>
     <button class="lnk" type="button" data-act="salir">Salir</button>
-  </div></header>${nav}<main>${contenido}</main><footer class="pie">${SG_MARCA}</footer>${e && !UI.demo ? fabSoporte() : ''}${barraDemo()}`;
+  </div></header>${nav ? `<div class="cuerpo">${nav}<main>${contenido}</main></div>` : `<main>${contenido}</main>`}<footer class="pie">${SG_MARCA}</footer>${e && !UI.demo ? fabSoporte() : ''}${barraDemo()}`;
 }
 function head(titulo, lead, botones){
   return `<div class="head"><div><h2>${titulo}</h2>${lead ? `<p class="lead">${lead}</p>` : ''}</div>${botones ? `<div class="acts">${botones}</div>` : ''}</div>`;
@@ -6347,6 +6368,8 @@ const ACTS = {
   salir: () => salir(),
   miClave: () => dlgClave(false),
   accTab: b => { UI.f.accesoTab = b.dataset.v; render(); },
+  menuAbrir: () => { document.body.classList.add('menu-abierto'); },
+  menuCerrar: () => { document.body.classList.remove('menu-abierto'); },
   platTab: b => { UI.plat = b.dataset.v; render(); },
   entrar: b => { cerrar(); UI.vista = 'inicio'; entrarEmpresa(b.dataset.id); render(); window.scrollTo(0, 0); },
   salirEmpresa: () => { entrarEmpresa(null); UI.vista = 'inicio'; render(); },
@@ -6429,7 +6452,7 @@ const ACTS = {
 Object.assign(FORMS, FORMS_F1, FORMS_F2, FORMS_F3, FORMS_F4, FORMS_F5, FORMS_F6); Object.assign(ACTS, ACTS_F1, ACTS_F2, ACTS_F3, ACTS_F4, ACTS_F5, ACTS_F6); instalarF6();
 document.addEventListener('click', e => {
   const nav = e.target.closest('[data-nav]');
-  if (nav){ UI.vista = nav.dataset.nav; cerrar(); render(); window.scrollTo(0, 0); HIST.marcar(); return; }
+  if (nav){ document.body.classList.remove('menu-abierto'); UI.vista = nav.dataset.nav; cerrar(); render(); window.scrollTo(0, 0); HIST.marcar(); return; }
   const a = e.target.closest('[data-act]');
   if (a && ACTS[a.dataset.act]){ if (a.tagName === 'TR' && e.target.closest('button')) return; e.preventDefault(); Promise.resolve(ACTS[a.dataset.act](a)).then(() => HIST.marcar()).catch(errGuardar); }
 });
