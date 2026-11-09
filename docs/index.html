@@ -4628,7 +4628,7 @@ async function pagarBold(btn){
   const n = e.trabajadoresActivos || 0; const plan = n <= 10 ? 'micro' : n <= 50 ? 'pequena' : n <= 200 ? 'mediana' : 'grande'; // mismos tramos que la central de pagos
   if (btn){ btn.disabled = true; btn.dataset.t = btn.textContent; btn.textContent = 'Abriendo Bold…'; }
   try {
-    const q = new URLSearchParams({ plan:'centinela:' + plan, empresa:C.cid, meses:String(btn?.dataset?.m || mesesDebe(e)), org:String(e.razon || '').slice(0, 40), volver:location.origin + location.pathname + '?pago=bold' });
+    const q = new URLSearchParams({ plan:'centinela:' + plan, empresa:C.cid, meses:String(btn?.dataset?.m || mesesDebe(e)), org:String(e.razon || '').slice(0, 40), volver:location.origin + '/' });
     const r = await fetch('https://skynetgenesis.com/bold-firma.php?' + q.toString(), { cache:'no-store' }); const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || 'firma');
     if (!window.BoldCheckout) await new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = 'https://checkout.bold.co/library/boldPaymentButton.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc); });
@@ -4639,7 +4639,7 @@ async function pagarBold(btn){
 }
 /* Al volver de Bold: se pide a la central que confirme el pedido y se consulta hasta que el pago quede aplicado */
 function esperarPagoBold(){
-  if (!/[?&]pago=bold/.test(location.search)) return;
+  if (!/[?&](pago=bold|bold-order-id=)/.test(location.search)) return;
   const qs = new URLSearchParams(location.search); const est = (qs.get('bold-tx-status') || '').toLowerCase();
   let ini = null, orden = qs.get('bold-order-id') || '';
   try { const g = (sessionStorage.getItem('centinela-bold-antes') || '').split('~'); ini = g[0] || null; orden = orden || g[1] || ''; sessionStorage.removeItem('centinela-bold-antes'); } catch(x){}
@@ -4679,7 +4679,7 @@ async function pagoPruebaBold(btn){
   if (!API.url) return toast('Solo en la versión publicada.');
   btn.disabled = true;
   try {
-    const q = new URLSearchParams({ plan:'centinela:prueba', empresa:'plataforma', meses:'1', volver:location.origin + location.pathname + '?pago=bold' });
+    const q = new URLSearchParams({ plan:'centinela:prueba', empresa:'plataforma', meses:'1', volver:location.origin + '/' });
     const r = await fetch('https://skynetgenesis.com/bold-firma.php?' + q.toString(), { cache:'no-store' }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error('firma');
     if (!window.BoldCheckout) await new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = 'https://checkout.bold.co/library/boldPaymentButton.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc); });
     new window.BoldCheckout({ orderId:d.orderId, currency:d.currency, amount:String(d.amount), apiKey:d.apiKey, integritySignature:d.signature, description:d.description, redirectionUrl:d.redirectionUrl }).open();
@@ -5339,7 +5339,7 @@ async function pagarMarket(btn){
   const plan = ped.includes('doc-todos') ? 'centinela:doc-todos' : ped.length === 1 ? 'centinela:' + ped[0] : 'centinela:paq_' + ped.join('_');
   btn.disabled = true; const t0 = btn.textContent; btn.textContent = 'Abriendo Bold…';
   try {
-    const q = new URLSearchParams({ plan, empresa:C.cid, meses:'1', org:String(e.razon || '').slice(0, 40), volver:location.origin + location.pathname + '?pago=bold' });
+    const q = new URLSearchParams({ plan, empresa:C.cid, meses:'1', org:String(e.razon || '').slice(0, 40), volver:location.origin + '/' });
     const r = await fetch('https://skynetgenesis.com/bold-firma.php?' + q.toString(), { cache:'no-store' }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'firma');
     if (!window.BoldCheckout) await new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = 'https://checkout.bold.co/library/boldPaymentButton.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc); });
     try { sessionStorage.setItem('centinela-bold-antes', marcaPago(e) + '~' + d.orderId); } catch(x){}
