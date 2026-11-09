@@ -244,6 +244,9 @@ dl.kv dt{color:var(--muted)} dl.kv dd{margin:0}
 .lnkbtn{background:none;border:0;color:var(--navy-2);font-weight:600;cursor:pointer;padding:4px;text-decoration:underline;text-underline-offset:2px;align-self:center}
 .okmsg{color:var(--acc-2);font-weight:600;font-size:13.5px}
 .acceso .caja.ancha{width:min(640px,100%)}
+.acceso.foto{background:linear-gradient(180deg,rgba(11,79,138,.80),rgba(24,103,176,.62)),var(--foto) center/cover no-repeat;background-color:var(--navy)}
+.fbanner{height:170px;border-radius:14px;margin:0 0 14px;background:linear-gradient(90deg,rgba(11,79,138,.55),rgba(11,79,138,0) 60%),var(--foto) center 35%/cover no-repeat;background-color:var(--navy)}
+@media (max-width:600px){.fbanner{height:120px}}
 .acceso .form{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}.acceso .form .full{grid-column:1/-1}
 @media (max-width:560px){.acceso .form{grid-template-columns:1fr}}
 .acceso label.chk{flex-direction:row;align-items:flex-start;gap:8px;font-weight:500;color:var(--ink);font-size:13.5px}.acceso label.chk .lnkbtn{padding:0;font-size:13.5px;display:inline}
@@ -842,7 +845,7 @@ function vSetup(){
 }
 function vAcceso(){
   const t = UI.f.accesoTab;
-  return `${modoBanner()}<div class="acceso"><div class="caja">
+  return `${modoBanner()}<div class="acceso foto" style="--foto:url('${t === 'trabajador' ? 'https://images.unsplash.com/photo-1664382953403-fc1ac77073a0?auto=format&fit=crop&w=1600&q=70' : 'https://images.unsplash.com/photo-1787321280637-81ce957b60e7?auto=format&fit=crop&w=1600&q=70'}')" ><div class="caja">
     <div class="brand">${TORRE}<b>Centinela-IA SST</b></div>
     <p class="small" style="margin:6px 0 0">Seguridad y salud en el trabajo que avisa qué falta, a quién le toca y cuándo vence.</p>
     <div class="tabs2" role="group" aria-label="Tipo de acceso"><button type="button" data-act="accTab" data-v="personal" aria-pressed="${t === 'personal'}">Personal SST y empresa</button><button type="button" data-act="accTab" data-v="trabajador" aria-pressed="${t === 'trabajador'}">Soy trabajador</button></div>
@@ -869,7 +872,7 @@ function vAcceso(){
 const RIESGOS_OPC = [[1,'I (mínimo)'],[2,'II (bajo)'],[3,'III (medio)'],[4,'IV (alto)'],[5,'V (máximo)']];
 function vRegistro(){
   const r = UI.registro || {}; const n = Number(r.n || 0); const tr = tramoDe(n);
-  return `<div class="acceso"><div class="caja ancha">
+  return `<div class="acceso foto" style="--foto:url('https://images.unsplash.com/photo-1768677903496-becc4be07258?auto=format&fit=crop&w=1600&q=70')"><div class="caja ancha">
     <div class="brand">${TORRE}<b>Centinela-IA SST</b></div>
     <h3 style="margin:10px 0 2px">Cree la cuenta de su empresa</h3>
     <p class="small" style="margin:0">15 días gratis, sin tarjeta. Después paga la mensualidad en línea según sus trabajadores activos; sin permanencia.</p>
@@ -4743,7 +4746,7 @@ function vPortal(){
       ${t.consentimiento ? '' : `<label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px;font-size:14px"><input type="checkbox" name="consent" id="pt-c" style="margin-top:4px"><span>Autorizo a ${esc(e.razon)} y a su equipo de seguridad y salud en el trabajo a tratar mis datos de salud con la única finalidad de prevenir riesgos laborales, según la Ley 1581 de 2012. Sé que mis respuestas solo las ven profesionales de salud, que no estoy obligado a responder preguntas sobre datos sensibles, y que puedo conocer, actualizar y rectificar mis datos.</span></label>`}
       ${formTamizaje(P.instr, 'p')}<p class="msg" id="pt-msg"></p><div class="acts" style="margin-top:10px"><button class="btn" type="button" data-act="portalVolver">Cancelar</button><button class="btn pri" type="submit">Enviar respuestas</button></div></form></main>`;
   }
-  return hdr + `<main style="max-width:860px"><h2>Hola, ${esc(t.nombres.split(' ')[0])}</h2><p class="lead">Estos cuestionarios ayudan a cuidar su salud en el trabajo. Sus respuestas solo las ven el médico o el psicólogo de SST.</p>
+  return hdr + `<main style="max-width:860px"><div class="fbanner" role="img" aria-label="Trabajadoras caminando por el pasillo de una bodega" style="--foto:url('https://images.unsplash.com/photo-1664382953403-fc1ac77073a0?auto=format&fit=crop&w=1600&q=70')"></div><h2>Hola, ${esc(t.nombres.split(' ')[0])}</h2><p class="lead">Estos cuestionarios ayudan a cuidar su salud en el trabajo. Sus respuestas solo las ven el médico o el psicólogo de SST.</p>
   <div class="grid g2" style="margin-top:14px">${Object.entries(INSTR).map(([k, i]) => { const u = mis.filter(x => x.instrumento === k).sort((a,b) => b.fecha.localeCompare(a.fecha))[0];
     return `<div class="box" style="display:flex;flex-direction:column;gap:8px"><h3>${esc(i.nombre)}</h3><p class="small" style="margin:0">${i.items.length} preguntas · ${i.min} minutos</p><p class="small" style="margin:0">${u ? 'Lo respondió el ' + fmt(u.fecha) : 'Pendiente'}</p><div><button class="btn ${u ? '' : 'pri'}" type="button" data-act="portalInstr" data-v="${k}">${u ? 'Responder de nuevo' : 'Responder'}</button></div></div>`; }).join('')}</div>
   ${(() => { const ips = ipsCfg(); return `<div class="box" style="margin-top:16px;box-shadow:inset 4px 0 0 var(--bad)"><h3>¿Necesita atención médica urgente?</h3><p style="margin:6px 0 0">${esc(ips.nombre)} lo atiende${ips.horario ? ' ' + esc(ips.horario) : ''}. WhatsApp <a href="${waLink(ips.whatsapp)}" target="_blank" rel="noopener"><b class="mono">${esc(ips.whatsapp)}</b></a>${ips.direccion ? ' · ' + esc(ips.direccion) + ', ' + esc(ips.ciudad) : ''}. Avise también a su jefe inmediato.</p><p class="small" style="margin:4px 0 8px">Si hay riesgo para la vida, llame primero al 123.</p>${waBtn(waTexto('URGENCIA MÉDICA', [`Trabajador: ${nombreT(t)}, ${t.tipoDoc} ${t.documento}`, `Cargo: ${cargoN(t.cargo)}`, `Empresa: ${e.razon} (NIT ${e.nit}-${e.dv})`, `Fecha: ${fmtDT(new Date().toISOString())}`, 'Qué me pasa: (escriba aquí)', 'Dónde estoy: (escriba aquí)']), 'Pedir atención urgente por WhatsApp')}</div>`; })()}
