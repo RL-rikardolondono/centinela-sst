@@ -662,7 +662,7 @@ const server = http.createServer(async (req, res) => {
       return enviar(res, 200, { token:firmar({ t:'w', cid:e.id, tid:t.id }), cid:e.id, tid:t.id });
     }
     if (p === '/api/cron/diario'){
-      if (!CLAVE_CRON || u.searchParams.get('clave') !== CLAVE_CRON) return enviar(res, 403, { code:'forbidden' });
+      if (!CLAVE_CRON || String(u.searchParams.get('clave') || '').replace(/ /g, '+') !== CLAVE_CRON) return enviar(res, 403, { code:'forbidden' }); // un "+" de la clave llega como espacio si no se codifica
       return enviar(res, 200, { ok:true, resultado:await correoDiario() });
     }
     if (p === '/api/registro' && req.method === 'POST'){ // cuenta nueva desde la página o la demostración: 15 días gratis, sin tarjeta
