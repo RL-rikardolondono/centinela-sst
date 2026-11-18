@@ -196,7 +196,8 @@ function puedeLeer(s, ruta, d){
   if (s.rol === 'super') return false; // el Superadministrador administra la plataforma, no ve los datos de trabajo de las empresas
   if (cid !== s.empresa) return false;
   const c = col.split('/')[2];
-  if (CLIN.has(c)) return esClin(s.rol);
+  if (CLIN.has(c)){ if (s.rol === 'medico') return true; if (s.rol !== 'psicologo') return false; // (18 nov 2026) el psicólogo solo ve lo psicosocial
+    if (c === 'bateriaInd') return true; if (c === 'casos') return !!d && d.programa === 'psico'; if (c === 'tamizajes') return !!d && d.instrumento === 'estres'; return false; }
   if (s.rol === 'jefe'){
     if (JEFE_NO.has(c)) return false;
     if (!s.area) return false; // un jefe sin área no ve datos de personas ni tareas
@@ -494,6 +495,7 @@ async function registrar(b, laIp){
       const txt = (v, n) => String(v ?? '').replace(/[<>"']/g, '').trim().slice(0, n);
   const razon = txt(b.razon, 120), nit = String(b.nit || '').split('-')[0].replace(/\D/g, '').replace(/^0+/, ''), dv = String(b.dv || '').replace(/\D/g, ''), nombre = txt(b.nombre, 80), correo = txt(b.correo, 120).toLowerCase(), celular = txt(b.celular, 20).replace(/[^\d+ ]/g, ''), ciudad = txt(b.ciudad, 60), clave = String(b.clave || '');
   const riesgo = Math.min(5, Math.max(1, Number(b.riesgo) || 1)), trab = Math.min(100000, Math.max(0, Number(b.trabajadores) || 0));
+  if (txt(b.celular, 20) && celular.replace(/\D/g, '').length < 7) return { status:400, body:{ code:'invalid_argument', message:'Escriba el celular solo con números.' } };
   if (!razon || !nombre || !celular) return { status:400, body:{ code:'invalid_argument', message:'Complete la razón social, su nombre y su celular.' } };
   if (!/^\d{6,12}$/.test(nit) || String(dvNit(nit)) !== dv) return { status:400, body:{ code:'nit', message:'Revise el NIT y el dígito de verificación.' } };
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)) return { status:400, body:{ code:'correo', message:'Escriba un correo válido.' } };
@@ -505,7 +507,7 @@ async function registrar(b, laIp){
   if (coleccion('usuarios').some(x => x.usuario === correo || String(x.correo || '').toLowerCase() === correo) || doc('pruebas/' + hc)) return { status:409, body:{ code:'correo_existe', message:'Ese correo ya tiene una cuenta. Entre con él o recupere la contraseña.' } };
   const hoy = HOY(); const d0 = new Date(hoy + 'T12:00:00Z'); d0.setUTCDate(d0.getUTCDate() + DIAS_PRUEBA - 1); /* 15 días contando hoy */ const hasta = d0.toISOString().slice(0, 10);
   const cid = 'e' + crypto.randomBytes(7).toString('hex'), uid = 'u' + crypto.randomBytes(8).toString('hex'), sal = crypto.randomBytes(12).toString('hex'), en = new Date().toISOString();
-  await poner('empresas/' + cid, { razon, nit, dv, actividad:'', riesgo, arl:'', ciudad, direccion:'', telefono:celular, correo, representante:'', responsable:nombre, trabajadoresActivos:0, trabajadoresDeclarados:trab, pagos:[], vence:hasta, prueba:{ desde:hoy, hasta }, plan:txt(b.plan, 20), origen:'registro', creado:{ por:'Registro en línea', en } });
+  await poner('empresas/' + cid, { razon, nit, dv, actividad:'', riesgo, arl:'', ciudad, direccion:'', telefono:celular, correo, representante:'', responsable:nombre, trabajadoresActivos:0, trabajadoresDeclarados:trab, pagos:[], vence:hasta, prueba:{ desde:hoy, hasta }, plan:txt(b.plan, 20), resumenDiario:true, origen:'registro', creado:{ por:'Registro en línea', en } });
   await poner('usuarios/' + uid, { usuario:correo, correo, nombre, rol:'admin', empresa:cid, licencia:'', sal, hash:hashClave(clave, sal), activo:true, creado:en });
   await poner('pruebas/n' + nit, { empresa:cid, en }); await poner('pruebas/' + hc, { empresa:cid, en });
   const tv = firmar({ t:'v', uid }, 7 * 24 * 3600e3);
@@ -646,7 +648,7 @@ const server = http.createServer(async (req, res) => {
       if (frenar(k, 5, 15) || frenar(kg, 40, 15) || frenar('lip:' + ip(req), 30, 15)) return enviar(res, 429, { code:'rate_limited', message:'Demasiados intentos. Espere 15 minutos.' });
       fallo(k); fallo(kg); fallo('lip:' + ip(req)); // se anota antes de verificar: intentos simultáneos también cuentan
       if (!u2 || hashClave(b.clave || '', u2.sal) !== u2.hash) return enviar(res, 401, { code:'credenciales', message:'Usuario o contraseña incorrectos.' });
-      INTENTOS.delete(k); INTENTOS.delete(kg);
+      INTENTOS.delete(k); INTENTOS.delete(kg); { const a = INTENTOS.get('lip:' + ip(req)); if (a && a.length) a.pop(); } // (18 nov 2026) un ingreso correcto no cuenta para el tope de la conexión
       if (u2.activo === false) return enviar(res, 403, { code:'inactivo', message:u2.bloqueo ? 'Este usuario está bloqueado por la plataforma. Escríbanos por WhatsApp 304 437 5758.' : 'Este usuario está desactivado. Hable con el administrador de su empresa.' });
       if (!u2.ultimo || Date.now() - Date.parse(u2.ultimo) > 3600e3) marcarIngreso(u2.id).catch(() => {}); // último ingreso («Cuentas y accesos»)
       return enviar(res, 200, { token:firmar({ t:'u', uid:u2.id }), uid:u2.id });
