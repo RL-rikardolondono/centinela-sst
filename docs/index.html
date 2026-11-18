@@ -1061,7 +1061,7 @@ VIEWS.inicio = () => {
       <div><div>${esc(a.texto)}</div><div class="small">${a.sobre ? esc(a.sobre) + ' · ' : ''}le toca a: ${esc(a.quien)}</div></div>
       <button class="btn sm" type="button" data-nav="${a.ir}">Ver</button></li>`; }).join('')}</ol>` : '<p class="empty">Sin pendientes.</p>'}</section>
     <div class="grid" style="align-content:start">
-      ${(() => { const ips = ipsCfg(); return `<section class="box" style="box-shadow:inset 4px 0 0 var(--bad)"><h3>Urgencias médicas de sus trabajadores</h3><p style="margin:6px 0 0">${esc(ips.nombre)} los atiende${ips.horario ? ' ' + esc(ips.horario) : ''}. WhatsApp <a href="${waLink(ips.whatsapp)}" target="_blank" rel="noopener"><b class="mono">${esc(ips.whatsapp)}</b></a>${ips.direccion ? ' · ' + esc(ips.direccion) + ', ' + esc(ips.ciudad) : ''}.</p><p class="small" style="margin:4px 0 8px">Si hay riesgo para la vida, llame primero al 123.</p><div class="acts">${waBtn(waUrgencia(), 'Reportar urgencia por WhatsApp', null, true)}<button class="btn sm" type="button" data-act="soporte">Abrir soporte médico en línea</button></div></section>`; })()}
+      <section class="box" style="box-shadow:inset 4px 0 0 var(--bad)"><h3>Urgencias médicas de sus trabajadores</h3><p style="margin:6px 0 0">Para urgencias médicas, el trabajador debe llamar a su EPS. Si hay riesgo para la vida, llame primero al 123. Reporte también el accidente a la ARL.</p></section>
       <section class="box"><h3>Casos en vigilancia por programa</h3>
       ${puede.clinico() || rol() === 'admin' || rol() === 'super' || rol() === 'medico' ? barrasProgramas() : '<p class="small">Disponible para el administrador y los profesionales de salud.</p>'}</section>
       <section class="box"><h3>Empresa</h3><dl class="kv" style="margin-top:8px">
@@ -1205,7 +1205,7 @@ async function importar(form){
     const doc = { tipoDoc:'CC', estado:'activo', ...(prev ? clone(prev) : { codigo:codigoPortal(), creado:marca() }), ...Object.fromEntries(Object.entries(r).filter(([, v]) => v !== '')) };
     delete doc.id; if (!doc.apellidos) doc.apellidos = '';
     const id = prev ? prev.id : genId('t');
-    try { await Data.set('e/' + C.cid + '/trabajadores/' + id, doc); prev ? act++ : nuevos++; } catch(e){ err++; }
+    try { await Data.set('e/' + C.cid + '/trabajadores/' + id, doc); prev ? act++ : nuevos++; porDoc[r.documento] = { ...doc, id }; } catch(e){ err++; }
   }
   await bitacora('Importó trabajadores', `${nuevos} nuevos, ${act} actualizados desde ${f.name}`);
   await sincronizarConteo();
@@ -1291,7 +1291,7 @@ function dlgEval(id, tid){
     <label class="full">Trabajador${req}<select class="field" id="ev-t" name="trabajador" required>${optsTrab(e.trabajador, true)}</select></label>
     <label>Tipo de evaluación${req}<select class="field" id="ev-tipo" name="tipo">${opts(TIPOS_EVAL, e.tipo)}</select></label>
     <label>Fecha${req}<input class="field" id="ev-f" name="fecha" type="date" value="${esc(e.fecha)}" required></label>
-    <label>IPS o prestador${req}<input class="field" id="ev-ips" name="ips" list="dl-ips" value="${esc(e.ips)}" required placeholder="Escriba o escoja la IPS que hizo el examen"><datalist id="dl-ips">${[...new Set([ipsCfg().nombre, ...lista('evaluaciones').map(x => x.ips).filter(Boolean)])].map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
+    <label>IPS o prestador${req}<input class="field" id="ev-ips" name="ips" list="dl-ips" value="${esc(e.ips)}" required placeholder="Escriba o escoja la IPS que hizo el examen"><datalist id="dl-ips">${[...new Set([...lista('evaluaciones').map(x => x.ips).filter(Boolean)])].map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
     <label>Médico que emite el concepto${req}<input class="field" id="ev-med" name="medico" value="${esc(e.medico)}" required placeholder="Nombre del médico con licencia en SST"></label>
     ${sec(2, 'Concepto de aptitud', 'lo que la empresa debe cumplir')}
     <label class="full">Concepto${req}<select class="field" id="ev-c" name="concepto">${opts(Object.keys(CONCEPTOS), e.concepto)}</select></label>
@@ -1437,7 +1437,7 @@ VIEWS.accidentes = () => {
     return `<tr><td class="num">${fmt(a.fecha)}</td><td class="nm">${esc(nombreT(t))}<span class="sub">${esc(cargoN(t?.cargo))}</span></td><td>${pill(a.tipo, a.tipo === 'Incidente' ? 'p-info' : a.tipo === 'Accidente leve' ? 'p-warn' : 'p-bad')}</td><td style="max-width:280px">${esc(a.descripcion)}<span class="sub">${esc(a.lugar || '')}</span></td><td class="r num">${a.dias || 0}</td>
     <td>${a.tipo === 'Incidente' ? '<span class="small">No aplica</span>' : a.reporteARL ? pill(fmt(a.reporteARL), 'p-ok') : pill('Plazo ' + fmt(lim), diasA(lim) < 0 ? 'p-bad' : 'p-warn')}</td>
     <td>${a.investigacion ? pill(fmt(a.investigacion), 'p-ok') : pill('Plazo ' + fmt(limI), diasA(limI) < 0 ? 'p-bad' : 'p-warn')}</td>
-    <td style="white-space:nowrap">${ed ? `<button class="btn sm" type="button" data-act="accidente" data-id="${a.id}">Abrir</button> ` : ''}${a.tipo !== 'Incidente' && ed ? waBtn(waTexto(a.tipo.toUpperCase() + ' DE TRABAJO', [...ctxEmpresa(), `Trabajador: ${nombreT(t)}, ${t?.tipoDoc || ''} ${t?.documento || ''}, cargo ${cargoN(t?.cargo)}`, `Evento: ${a.tipo} del ${fmt(a.fecha)}${a.hora ? ' a las ' + a.hora : ''}${a.lugar ? ' en ' + a.lugar : ''}`, `Qué pasó: ${a.descripcion}`, 'Solicitamos: valoración médica y orientación']), 'Avisar a ' + ipsCfg().nombre.replace(/ IPS$/, ''), null, true) : ''}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">Sin eventos registrados.</td></tr>'}
+    <td style="white-space:nowrap">${ed ? `<button class="btn sm" type="button" data-act="accidente" data-id="${a.id}">Abrir</button> ` : ''}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">Sin eventos registrados.</td></tr>'}
   </tbody></table></div>
   ${anul.length ? `<details class="box" style="margin-top:12px"><summary class="small" style="cursor:pointer"><b>${anul.length} ${anul.length === 1 ? 'registro anulado' : 'registros anulados'}</b> (no cuentan en los indicadores; se conservan como evidencia)</summary><div class="tw" style="margin-top:8px"><table class="t"><tbody>${anul.map(a => `<tr class="off"><td class="num">${fmt(a.fecha)}</td><td>${esc(nombreT(tById(a.trabajador)))}</td><td>${esc(a.tipo)}</td><td class="small">Anulado el ${fmt(a.anulado.fecha)} por ${esc(a.anulado.por)}: ${esc(a.anulado.motivo)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
   <details class="norma"><summary>Base legal y notas de esta pantalla <small>· pulse para verlas</small></summary><p><b>Normas:</b> Resolución 156 de 2005 y Decreto 1072 de 2015 (reporte del accidente a la ARL y EPS dentro de los 2 días hábiles siguientes, FURAT) · Resolución 1401 de 2007 (investigación dentro de los 15 días siguientes; los graves y mortales se remiten a la ARL) · Resolución 0312 de 2019 (estándares 3.2.1 y 3.2.2).</p></details>`;
@@ -1897,7 +1897,7 @@ function dlgEmpresa(cid, nueva){
     ${sec(4, 'Responsables y avisos')}
     <label>Representante legal<input class="field" id="em-rep" name="representante" value="${esc(e.representante)}"></label>
     <label class="full">Responsable del SG-SST (nombre y licencia)<input class="field" id="em-resp" name="responsable" value="${esc(e.responsable)}"></label>
-    <label class="full chk"><input type="checkbox" name="resumenDiario" value="1" ${e.resumenDiario ? 'checked' : ''}> Recibir un resumen diario por correo (opcional). Si no lo marca, los pendientes aparecen solo en la campana de la aplicación.</label>
+    <label class="full chk"><input type="checkbox" name="resumenDiario" value="1" ${e.resumenDiario ? 'checked' : ''}> Recibir un resumen diario por correo con lo que vence. Si lo desmarca, los pendientes aparecen solo en la campana de la aplicación.</label>
     <p class="hint full">El resumen lo envía SkyNet Genesis (servicio de correo Brevo) al correo de la empresa, solo los días en que hay pendientes. No tiene costo para la empresa y no se envía publicidad.</p>
     <div class="full"><div class="lbl" style="margin-bottom:6px">Logo de la empresa</div><div class="logoprev"><div class="lg" id="em-lgp">${e.logo ? `<img src="${e.logo}" alt="Logo">` : '<span class="small">Sin logo</span>'}</div>
       <div class="acts"><label class="btn" style="cursor:pointer">Subir logo<input type="file" id="em-logo" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden></label><button class="btn gh" type="button" data-act="quitarLogo">Quitar</button></div></div>
@@ -1922,7 +1922,7 @@ async function procesarLogo(file){
 }
 function dlgUsuario(id){
   const u = id ? { ...G.usuarios[id] } : { rol:'medico', activo:true };
-  const roles = Object.entries(ROL).filter(([k]) => k !== 'super');
+  const roles = Object.entries(ROL).filter(([k]) => k !== 'super' && (k !== 'asesor' || yo()?.rol === 'super' || u.rol === 'asesor'));
   formDlg('usuario', id ? 'Editar usuario' : 'Nuevo usuario', esc(emp().razon),
   `<div class="form"><input type="hidden" name="id" value="${esc(id || '')}">
     <label>Nombre completo<input class="field" id="us-n" name="nombre" value="${esc(u.nombre)}" required></label>
@@ -2872,7 +2872,7 @@ function riesgoAm(a){
   return { c, nivel, cls:{ Alto:'p-bad', Medio:'p-warn', Bajo:'p-ok' }[nivel] };
 }
 const rombo = k => `<span class="rombo rb-${k}" aria-hidden="true"></span>`;
-function contactosDef(arl){ const ips = ipsCfg(); arl = arl ?? emp()?.arl ?? ''; return `Línea única de emergencias: 123\nBomberos: 119\nCruz Roja: 132\nDefensa Civil: 144\nARL ${arl}: (línea de atención de su ARL)\n${ips.nombre}: WhatsApp ${ips.whatsapp}${ips.direccion ? ', ' + ips.direccion : ''}`; }
+function contactosDef(arl){ const ips = ipsCfg(); arl = arl ?? emp()?.arl ?? ''; return `Línea única de emergencias: 123\nBomberos: 119\nCruz Roja: 132\nDefensa Civil: 144\nARL ${arl}: (línea de atención de su ARL)\nEPS del trabajador: (línea de atención de su EPS)`; }
 const SIM_CRIT = ['La alarma se escuchó en todas las áreas','Las rutas de evacuación estaban libres y señalizadas','Los brigadistas cumplieron su función','Se hizo el conteo de personas en el punto de encuentro','Se atendió a visitantes y personas con movilidad reducida','Se simuló la comunicación con los organismos de socorro'];
 const SIM_TIPOS = ['Evacuación total','Evacuación parcial','Sismo','Conato de incendio','Primeros auxilios','Simulación de escritorio'];
 VIEWS.emergencias = () => {
@@ -3908,7 +3908,7 @@ VIEWS.ordenes = () => {
 };
 function examenesCargo(tid){ const t = tById(tid); const c = C.d.cargos?.[t?.cargo]; return c?.examenes?.length ? c.examenes : ['Evaluación médica ocupacional']; }
 function dlgOrden(id, tid){
-  const o = id ? clone(C.d.ordenes[id]) : { fecha:HOY, tipo:'Periódica', trabajador:tid || '', examenes:tid ? examenesCargo(tid) : [], ips:ipsCfg().nombre };
+  const o = id ? clone(C.d.ordenes[id]) : { fecha:HOY, tipo:'Periódica', trabajador:tid || '', examenes:tid ? examenesCargo(tid) : [], ips:'' };
   formDlg('orden', id ? 'Editar orden' : 'Nueva orden de exámenes', 'Al elegir el trabajador se marcan los exámenes de su cargo.',
   `<div class="form"><input type="hidden" name="id" value="${esc(id || '')}">
     <label class="full">Trabajador<select class="field" id="oe-t" name="trabajador" required>${optsTrab(o.trabajador)}</select></label>
@@ -4507,9 +4507,9 @@ const ACTS_F4 = {
   socioXls: () => xlsDe('Perfil sociodemografico', 'Perfil sociodemográfico (sin nombres)', SOCIO.map(x => x[1]), lista('sociodemo').filter(r => activos().some(t => t.id === r.trabajador)).map(r => SOCIO.map(([k]) => r[k] || ''))),
   orden: b => dlgOrden(b.dataset.id, b.dataset.t),
   ordenPdf: b => ordenPdf(b.dataset.id),
-  ordenEnviar: async b => { const id = b.dataset.id; const o = C.d.ordenes[id]; const tx = textoOrden(o); const ips = ipsCfg();
-    if (API.url){ try { const j = await API.call('POST', '/api/orden-ips', { orden:id }); toast(j.enviado ? 'Orden enviada por correo a ' + ips.nombre + '.' : 'El envío de correos aún no está activo: use el botón de correo.'); if (j.enviado) return; } catch(e){ toast(e.message || 'No se pudo enviar.'); } }
-    abrir(`<div class="dh"><div><h3>Enviar orden a la IPS</h3><p>${esc(ips.nombre)}</p></div><button class="x" type="button" data-act="cerrar" aria-label="Cerrar">×</button></div><div class="db"><p style="margin-top:0">Se abrirá su programa de correo con la orden ya escrita, dirigida a <b>${esc(ips.correo)}</b>. Adjunte el PDF si lo desea.</p><pre class="small" style="white-space:pre-wrap;background:var(--surface-2);padding:10px;border-radius:8px">${esc(tx.lineas.join('\n'))}</pre></div>
+  ordenEnviar: async b => { const id = b.dataset.id; const o = C.d.ordenes[id]; const tx = textoOrden(o); const ips = { nombre:o.ips || 'la IPS', correo:'' };
+    if (false){ try { const j = await API.call('POST', '/api/orden-ips', { orden:id }); toast(j.enviado ? 'Orden enviada por correo a ' + ips.nombre + '.' : 'El envío de correos aún no está activo: use el botón de correo.'); if (j.enviado) return; } catch(e){ toast(e.message || 'No se pudo enviar.'); } }
+    abrir(`<div class="dh"><div><h3>Enviar orden a la IPS</h3><p>${esc(ips.nombre)}</p></div><button class="x" type="button" data-act="cerrar" aria-label="Cerrar">×</button></div><div class="db"><p style="margin-top:0">Se abrirá su programa de correo con la orden ya escrita, ya escrita: escriba el correo de ${esc(ips.nombre)} y adjunte el PDF si lo desea.</p><pre class="small" style="white-space:pre-wrap;background:var(--surface-2);padding:10px;border-radius:8px">${esc(tx.lineas.join('\n'))}</pre></div>
     <div class="df"><button class="btn" type="button" data-act="cerrar">Cancelar</button><a class="btn pri" href="mailto:${encodeURIComponent(ips.correo)}?subject=${encodeURIComponent(tx.asunto)}&body=${encodeURIComponent(tx.lineas.join('\n'))}" data-act="ordenMarcar" data-id="${id}">Abrir el correo</a></div>`); },
   ordenMarcar: async b => { const o = clone(C.d.ordenes[b.dataset.id]); o.estado = 'enviada'; o.enviada = { en:new Date().toISOString(), por:yo()?.nombre || '', medio:'Correo' }; await Data.set(P4() + 'ordenes/' + b.dataset.id, o); cerrar(); location.href = b.getAttribute('href'); },
   ordenHecha: async b => { const o = clone(C.d.ordenes[b.dataset.id]); o.estado = 'realizada'; o.realizada = marca(); await Data.set(P4() + 'ordenes/' + b.dataset.id, o); toast('Orden marcada como realizada. Registre el certificado en Evaluaciones médicas.'); },
@@ -4583,7 +4583,7 @@ async function semillaF4(P){
   if (!API.url) await Data.set(P + 'postulaciones/po1', { eleccion:'el1', trabajador:'w6', propuesta:'Quiero ayudar a mejorar la seguridad en el patio de maniobras.', fecha:addD(HOY, -1), estado:'pendiente' });
   const SD = [['w1','36 a 45 años','Hombre','Casado(a) o unión libre','Bachillerato','2','Arrendada','3 o 4','6 a 10 años','Término indefinido','Moto','30 a 60 minutos','Ninguna','No','Ocasional','Familia'],['w2','26 a 35 años','Mujer','Soltero(a)','Universitario','3','Familiar','1 o 2','1 a 5 años','Término indefinido','Transporte público','Más de 1 hora','1 o 2 veces por semana','No','No consume','Estudio'],['w3','46 a 55 años','Hombre','Casado(a) o unión libre','Primaria','2','Propia','3 o 4','Más de 10 años','Término indefinido','Moto','Menos de 30 minutos','Ninguna','Lo dejó','Semanal o más','Familia'],['w5','26 a 35 años','Mujer','Casado(a) o unión libre','Técnico o tecnólogo','3','Arrendada','1 o 2','1 a 5 años','Término fijo','Transporte público','30 a 60 minutos','3 o más veces por semana','No','Ocasional','Deporte']];
   if (!API.url) for (const r of SD) await Data.set(P + 'sociodemo/' + r[0], { trabajador:r[0], fecha:addD(HOY, -20), consentimiento:true, ...Object.fromEntries(SOCIO.map(([k], i) => [k, r[i + 1]])) });
-  await Data.set(P + 'ordenes/oe1', { trabajador:'w5', tipo:'Periódica', fecha:addD(HOY, -20), ips:IPS0.nombre, examenes:['Evaluación médica ocupacional','Énfasis osteomuscular','Visiometría'], estado:'enviada', enviada:{ en:addD(HOY, -20) + 'T15:00:00.000Z', por:'Coordinador SST', medio:'Correo' }, creado:marca() });
+  await Data.set(P + 'ordenes/oe1', { trabajador:'w5', tipo:'Periódica', fecha:addD(HOY, -20), ips:'IPS Salud Integral (ejemplo)', examenes:['Evaluación médica ocupacional','Énfasis osteomuscular','Visiometría'], estado:'enviada', enviada:{ en:addD(HOY, -20) + 'T15:00:00.000Z', por:'Coordinador SST', medio:'Correo' }, creado:marca() });
   const au = (b, d) => Object.fromEntries(['od','oi'].flatMap(o => FREQ.map(f => [o + f, f >= 3000 ? b + d : b])));
   await Data.set(P + 'paraclinicos/pc1', { trabajador:'w2', tipo:'audiometria', fecha:addD(HOY, -400), datos:au(10, 5), interpretacion:'Audición normal', base:true, creado:marca() });
   await Data.set(P + 'paraclinicos/pc2', { trabajador:'w2', tipo:'audiometria', fecha:addD(HOY, -10), datos:au(15, 20), interpretacion:'Descenso en frecuencias agudas', base:false, creado:marca() });
@@ -4770,7 +4770,7 @@ function vPortal(){
   return hdr + `<main style="max-width:860px"><div class="fbanner" role="img" aria-label="Trabajadoras caminando por el pasillo de una bodega" style="--foto:url('https://images.unsplash.com/photo-1664382953403-fc1ac77073a0?auto=format&fit=crop&w=1600&q=70')"></div><h2>Hola, ${esc(t.nombres.split(' ')[0])}</h2><p class="lead">Estos cuestionarios ayudan a cuidar su salud en el trabajo. Sus respuestas solo las ven el médico o el psicólogo de SST.</p>
   <div class="grid g2" style="margin-top:14px">${Object.entries(INSTR).map(([k, i]) => { const u = mis.filter(x => x.instrumento === k).sort((a,b) => b.fecha.localeCompare(a.fecha))[0];
     return `<div class="box" style="display:flex;flex-direction:column;gap:8px"><h3>${esc(i.nombre)}</h3><p class="small" style="margin:0">${i.items.length} preguntas · ${i.min} minutos</p><p class="small" style="margin:0">${u ? 'Lo respondió el ' + fmt(u.fecha) : 'Pendiente'}</p><div><button class="btn ${u ? '' : 'pri'}" type="button" data-act="portalInstr" data-v="${k}">${u ? 'Responder de nuevo' : 'Responder'}</button></div></div>`; }).join('')}</div>
-  ${(() => { const ips = ipsCfg(); return `<div class="box" style="margin-top:16px;box-shadow:inset 4px 0 0 var(--bad)"><h3>¿Necesita atención médica urgente?</h3><p style="margin:6px 0 0">${esc(ips.nombre)} lo atiende${ips.horario ? ' ' + esc(ips.horario) : ''}. WhatsApp <a href="${waLink(ips.whatsapp)}" target="_blank" rel="noopener"><b class="mono">${esc(ips.whatsapp)}</b></a>${ips.direccion ? ' · ' + esc(ips.direccion) + ', ' + esc(ips.ciudad) : ''}. Avise también a su jefe inmediato.</p><p class="small" style="margin:4px 0 8px">Si hay riesgo para la vida, llame primero al 123.</p>${waBtn(waTexto('URGENCIA MÉDICA', [`Trabajador: ${nombreT(t)}, ${t.tipoDoc} ${t.documento}`, `Cargo: ${cargoN(t.cargo)}`, `Empresa: ${e.razon} (NIT ${e.nit}-${e.dv})`, `Fecha: ${fmtDT(new Date().toISOString())}`, 'Qué me pasa: (escriba aquí)', 'Dónde estoy: (escriba aquí)']), 'Pedir atención urgente por WhatsApp')}</div>`; })()}
+  <div class="box" style="margin-top:16px;box-shadow:inset 4px 0 0 var(--bad)"><h3>¿Necesita atención médica urgente?</h3><p style="margin:6px 0 0">Llame a su EPS. Si hay riesgo para la vida, llame primero al 123. Avise también a su jefe inmediato.</p></div>
   ${(() => { const mr = lista('reportes').filter(r => r.trabajador === tid).sort((a,b) => (b.en || b.fecha).localeCompare(a.en || a.fecha));
     return `<div class="box" style="margin-top:16px;box-shadow:inset 4px 0 0 var(--amber, #E0A21A)"><h3>¿Vio un peligro en su trabajo?</h3><p style="margin:6px 0 10px">Reporte condiciones o actos inseguros, casi accidentes o ideas de mejora. Puede hacerlo sin su nombre.</p><button class="btn pri" type="button" data-act="portalReporte">Reportar un peligro</button>
     ${mr.length ? `<h4 style="margin:16px 0 6px">Mis reportes</h4>${mr.slice(0, 10).map(r => `<div style="border-top:1px solid var(--line);padding:8px 0"><p style="margin:0">${pill(REP_EST[r.estado]?.[0] || r.estado, REP_EST[r.estado]?.[1])} <b>${esc(r.tipo)}</b> · ${esc(r.lugar)} · ${fmt(r.fecha)}</p>${r.respuesta ? `<p class="small" style="margin:4px 0 0"><b>Respuesta:</b> ${esc(r.respuesta)}</p>` : ''}</div>`).join('')}` : ''}</div>`; })()}
@@ -4796,7 +4796,7 @@ const SERVICIOS = ['Urgencia médica de un trabajador','Evaluaciones médicas oc
 const PRIORIDAD = { normal:['Normal','p-info'], semana:['Esta semana','p-warn'], hoy:['Urgente (hoy)','p-bad'] };
 const ESTADOS_SOP = { nueva:['Nueva','p-warn'], gestion:['En gestión','p-info'], programada:['Programada','p-amb'], resuelta:['Resuelta','p-ok'], cancelada:['Cancelada',''] };
 const sopLista = filtro => Object.entries(G.soporte || {}).map(([id, s]) => ({ ...s, id })).filter(filtro).sort((a,b) => b.en.localeCompare(a.en));
-function fabSoporte(){
+function fabSoporte(){ return ''; /* (18 nov 2026) sin IPS aliada: no hay soporte médico en línea */
   const mias = C.cid ? sopLista(s => s.empresa === C.cid && s.respuestaNueva).length : 0;
   return `<button class="fab" type="button" data-act="soporte" aria-label="Soporte médico en línea">${TORRE_CRUZ}<span>Soporte médico en línea</span>${mias ? `<i>${mias}</i>` : ''}</button>`;
 }
@@ -5202,7 +5202,7 @@ function optsNombresTrab(sel){
   return opts(ns, sel || '', '—');
 }
 /* Evaluaciones por programar: sugerir la IPS aliada con su contacto */
-function cajaIpsPend(pend){
+function cajaIpsPend(pend){ return ''; /* sin IPS aliada */
   const ips = ipsCfg(); const lin = pend.slice(0, 40).map(({ t, p }) => `- ${nombreT(t)}, ${t.tipoDoc} ${t.documento}, ${cargoN(t.cargo)}: ${p.falta === 'ingreso' ? 'evaluación de ingreso' : 'evaluación periódica (vence ' + fmt(p.vence) + ')'}`);
   const txt = waTexto('Programar evaluaciones médicas ocupacionales', [...ctxEmpresa(), 'Necesitamos programar estas evaluaciones:', ...lin, '', 'Por favor indíquenos fechas disponibles.']);
   return `<div class="box" style="margin-bottom:12px;box-shadow:inset 4px 0 0 var(--acc);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
@@ -5349,7 +5349,7 @@ VIEWS.market = () => {
   <section class="box" style="margin-bottom:16px;box-shadow:inset 4px 0 0 var(--navy)"><h3>🎓 Cursos con constancia de una institución aliada</h3>
     <p style="margin:6px 0">Cursos para sus trabajadores dictados por <b>una institución aliada</b> de educación para el trabajo y el desarrollo humano con licencia de funcionamiento de la Secretaría de Educación (sistema educativo reconocido por el Ministerio de Educación Nacional). Presenciales o virtuales, con constancia de asistencia y aprobación expedida por la institución que sirve como evidencia del programa de capacitación del SG-SST.</p>
     <div class="grid g3" style="margin:10px 0">${CURSOS_POLI.map(c => `<div class="box" style="padding:10px 12px"><b>${esc(c)}</b></div>`).join('')}</div>
-    <div class="acts" style="justify-content:flex-start"><a class="btn pri" href="${ALIADA.web}?origen=centinela&empresa=${encodeURIComponent(e?.razon || '')}" target="_blank" rel="noopener">Pedir un curso</a><a class="btn wa" href="${waLink(ALIADA.wa, 'Hola, ALIADA. Somos ' + (e?.razon || 'una empresa') + ' (usuarios de Centinela-IA SST) y queremos información de cursos de SST para nuestros trabajadores.')}" target="_blank" rel="noopener">WhatsApp 304 437 5758</a></div>
+    <div class="acts" style="justify-content:flex-start"><a class="btn pri" href="${ALIADA.web}?origen=centinela&empresa=${encodeURIComponent(e?.razon || '')}" target="_blank" rel="noopener">Pedir un curso</a><a class="btn wa" href="${waLink(ALIADA.wa, 'Hola. Somos ' + (e?.razon || 'una empresa') + ' (usuarios de Centinela-IA SST) y queremos información de cursos de SST para nuestros trabajadores.')}" target="_blank" rel="noopener">WhatsApp 304 437 5758</a></div>
     <p class="small" style="margin:8px 0 0">También puede crear sus propios cursos cortos en <button class="lnkbtn" type="button" data-nav="cursos" style="padding:0">Cursos en línea</button> (con constancia de Centinela-IA).</p></section>
   <section class="box" style="margin-bottom:16px;box-shadow:inset 4px 0 0 var(--wa)"><h3>🌐 Creamos la página web de su empresa</h3>
     <p style="margin:6px 0 10px">SkyNet Genesis diseña la página web de su empresa con su dominio propio, alojamiento, correo de contacto y un panel para que usted mismo actualice noticias, fotos y documentos. Pídala y le enviamos la propuesta.</p>
